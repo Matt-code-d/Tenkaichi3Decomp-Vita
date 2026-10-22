@@ -1059,6 +1059,12 @@ void EftSurf_Update(void) {
 
 /* Surface task draw. */
 void EftSurf_Draw(void) {
+#ifdef PORT_VITA
+    extern int gVitaSeaOff;
+    if (gVitaSeaOff) {
+        return; /* (a test's A/B only: bt3.txt seaoff=1, the stage's surfaces not drawn) */
+    }
+#endif
     if (!(gBtlStage->flags & 1) && BtlStage_IsReady() && EftStage_IsDrawOn()) {
         EftSurf_DrawMeshes();
     }
@@ -1261,6 +1267,106 @@ static inline EftTexEntry *EftSurfRt_GetTex(EftSurfRt *rt, s32 idx) {
     return &rt->texTbl[idx];
 }
 
+#ifdef PORT_VITA
+/* (port, Vita) 1 when the three corners of a surface triangle all lie clearly outside one of the five clip planes:
+   ClipPoly_ClipPlane leaves nothing of such a triangle, whichever clipping path it takes. Worked out in the console's
+   own float arithmetic it is the same answer except for corners within a hair of the plane, which are left to the
+   original path (the margin). On Namek about half of the 700 surface triangles a frame are wholly off the view, and
+   each went through its corners' set-up and up to five clipping calls first. */
+static s32 EftSurf_PortOutside(EftSurfTri *tri, Vec4 *pl) {
+    s32 p;
+    s32 k;
+
+    for (p = 0; p < 5; p++, pl++) {
+        for (k = 0; k < 3; k++) {
+            f32 a = pl->x * tri->v[k].pos[0], b = pl->y * tri->v[k].pos[1], c = pl->z * tri->v[k].pos[2];
+            f32 d = a + b + c + pl->w;
+            f32 m = (a < 0.0f ? -a : a) + (b < 0.0f ? -b : b) + (c < 0.0f ? -c : c) + (pl->w < 0.0f ? -pl->w : pl->w);
+            if (!(d < -1e-4f * m)) {
+                break; /* (this corner is not clearly outside this plane) */
+            }
+        }
+        if (k == 3) {
+            return 1;
+        }
+    }
+    return 0;
+}
+#endif
+
+#ifdef PORT_VITA
+/* (port, Vita) 1 when the three corners all lie clearly inside the five clip planes: ClipPoly_ClipPlane would hand
+   the triangle back unchanged five times (no corner outside), so the calls are left out. */
+static s32 EftSurf_PortInside(EftSurfVtx *tri, Vec4 *pl) {
+    s32 p;
+    s32 k;
+    extern int gVitaSurfCull;
+
+    if (!gVitaSurfCull) {
+        return 0;
+    }
+    for (p = 0; p < 5; p++, pl++) {
+        for (k = 0; k < 3; k++) {
+            f32 a = pl->x * tri[k].pos[0], b = pl->y * tri[k].pos[1], c = pl->z * tri[k].pos[2];
+            f32 d = a + b + c + pl->w * tri[k].pos[3];
+            f32 m = (a < 0.0f ? -a : a) + (b < 0.0f ? -b : b) + (c < 0.0f ? -c : c) + (pl->w < 0.0f ? -pl->w : pl->w);
+            if (!(d > 1e-4f * m) || tri[k].pos[3] != 1.0f) {
+                return 0;
+            }
+        }
+    }
+    return 1;
+}
+#endif
+
+#ifdef PORT_VITA
+/* where the surfaces' frame goes: [0] all, [1] the triangles' set-up, [2] their draws;
+   counts: [0] frames, [1] triangles looked at, [2] left out (off the view), [3] clipped draws, [4] unclipped draws,
+   [5] other kinds */
+unsigned long long gVitaSurfUs[3];
+unsigned gVitaSurfN[10];
+/* the processor's cycles in the surfaces, one frame in eight: [0] the triangles' set-up, [1] their
+   draw routines, of them [2] clipping, [3] projecting, [4] queueing; [5] triangles, [6] frames, [7] all */
+unsigned long long gVitaSurfCyc[8];
+int gVitaSurfMeas;
+extern int gVitaPerfOn;
+extern int scePerfArmPmonGetCounterValue(int thid, unsigned int counter, unsigned int *value);
+unsigned Vita_SurfCyc(void) {
+    unsigned v = 0;
+    scePerfArmPmonGetCounterValue(0, 31, &v);
+    return v;
+}
+extern unsigned int sceKernelGetProcessTimeLow(void);
+#define SURF_T() sceKernelGetProcessTimeLow()
+/* The vector library's routines the triangles' set-up calls three times a triangle, here in line: the same
+   operations in the same order as the library's fast stand-ins (port/src/port_vufast.c, checked bit for bit against
+   the library), in the float unit's mode of the game's thread; a result that is not finite goes to the library's
+   routine as the stand-in does. The copies are copies. (~1000 triangles a frame on Kame House.) */
+extern struct EftVuHead { f32 vf0[4], vf1[4], vf2[4], vf3[4]; } gRefVu0; /* (the vector unit's registers as the library keeps them: port/vu0_a.h) */
+static inline s32 EftV_Bad(f32 a) {
+    f32 t = a * 0.0f;
+    return t != t;
+}
+static inline f32 EftV_DistSq(f32 *a, f32 *b) {
+    f32 dx = a[0] - b[0], dy = a[1] - b[1], dz = a[2] - b[2], dw = a[3] - b[3];
+    f32 tx = dx * dx, ty = dy * dy, tz = dz * dz;
+    f32 s = (tx + ty) + gRefVu0.vf3[0] * tz;
+    if (EftV_Bad(s) | EftV_Bad(dw)) {
+        return Vec3_DistSq((Vec4 *)a, (Vec4 *)b);
+    }
+    return s;
+}
+static inline void EftV_Scale3(f32 *o, f32 s) {
+    f32 x = o[0] * s, y = o[1] * s, z = o[2] * s;
+    if (EftV_Bad(x) | EftV_Bad(y) | EftV_Bad(z)) {
+        Vec3_Scale((Vec4 *)o, (Vec4 *)o, s);
+        return;
+    }
+    o[0] = x;
+    o[1] = y;
+    o[2] = z;
+}
+#endif
 /* Draws every mesh of the surface file: scrolls and tints the vertices of each triangle, then sends it through
    the draw routine its flags select. */
 void EftSurf_DrawMeshes(void) {
@@ -1287,9 +1393,17 @@ void EftSurf_DrawMeshes(void) {
     s32 near;
     s32 layer;
 
+#ifdef PORT_VITA
+    unsigned surfT0 = SURF_T();
+    unsigned surfC0, surfC1 = 0, surfC2;
+    gVitaSurfN[0]++;
+    gVitaSurfMeas = gVitaPerfOn && (gVitaSurfN[0] & 7) == 0;
+    surfC0 = gVitaSurfMeas ? Vita_SurfCyc() : 0;
+#endif
     memset(tex, 0, sizeof(tex));
     EftGfx_UpdateClipPlanes();
     gEftSurf->u.s.planes = EftGfx_GetClipPlanes();
+
     Vec4_Copy((Vec4 *)cam, &gBtlCamView->pos);
     BtlStage_GetWaterLevel(&height);
     cam[1] = height;
@@ -1303,6 +1417,35 @@ void EftSurf_DrawMeshes(void) {
     }
     Vu0Cur_Push();
     Vu0Cur_LoadMtx(&gBtlCamView->world2screen);
+#ifdef PORT_VITA
+    {   /* the surfaces' meshes, once a fight, 20 s in */
+        extern void Vita_Log(const char *fmt, ...);
+        static s32 frames;
+        static EftSurf *seen;
+        if (seen != w) {
+            seen = w;
+            frames = 0;
+        }
+        if (++frames == 1200) {
+            EftSurfMesh *m = mesh;
+            s32 mi;
+            Vita_Log("vita: surfaces: %d meshes\n", meshCount);
+            for (mi = 0; mi < meshCount; mi++, m++) {
+                f32 y0 = m->triCount > 0 ? m->tris[0].v[0].pos[1] : 0.0f;
+                s32 t, k2, flat = 1;
+                for (t = 0; t < m->triCount; t++) {
+                    for (k2 = 0; k2 < 3; k2++) {
+                        if (m->tris[t].v[k2].pos[1] != y0) {
+                            flat = 0;
+                        }
+                    }
+                }
+                Vita_Log("vita:   mesh %d: flags %03x, %d triangles, texture %d, z bias %d, y %.2f..%.2f, %s (first corner y %.2f)\n", mi, m->flags, m->triCount, m->tex,
+                         m->zBias, m->boxMin.y, m->boxMax.y, flat ? "flat" : "not flat", y0);
+            }
+        }
+    }
+#endif
     for (i = 0; i < meshCount; i++, mesh++) {
         s32 flags;
         f32 u;
@@ -1341,15 +1484,72 @@ void EftSurf_DrawMeshes(void) {
         if (!(flags & EFT_SURF_NO_DEPTH_TEST)) {
             layer = (flags & EFT_SURF_LAYER2) ? 2 : 0;
         }
+#ifdef PORT_VITA
+        {   /* a reflecting surface queued in the ordering table whose corners all lie in one horizontal
+               plane: its triangles never cover each other, so Ot_Send may draw its two passes one after the other
+               (src/sys/gfx_ot.c); its packets are marked (eft_d.c EftSurf_QueueTri) */
+            extern int gVitaSeaMark, gVitaSeaRun;
+            gVitaSeaMark = 0;
+            if (gVitaSeaRun && (flags & (EFT_SURF_CLIP | EFT_SURF_REFLECT)) == EFT_SURF_REFLECT && triCount > 0) {
+                f32 y0 = tri[0].v[0].pos[1];
+                s32 t, k2, flat = 1;
+                for (t = 0; t < triCount && flat; t++) {
+                    for (k2 = 0; k2 < 3; k2++) {
+                        if (tri[t].v[k2].pos[1] != y0) {
+                            flat = 0;
+                        }
+                    }
+                }
+                gVitaSeaMark = flat;
+                gVitaSurfN[flat ? 8 : 9]++;
+            }
+        }
+#endif
         for (j = 0; j < triCount; j++, tri++) {
             s32 k;
 
+#ifdef PORT_VITA
+            gVitaSurfN[1]++;
+            if (gVitaSurfMeas) {
+                surfC1 = Vita_SurfCyc();
+            }
+#endif
+#ifdef PORT_VITA
+            dist[0] = EftV_DistSq(tri->v[0].pos, cam);
+            dist[1] = EftV_DistSq(tri->v[1].pos, cam);
+            dist[2] = EftV_DistSq(tri->v[2].pos, cam);
+#else
             dist[0] = Vec3_DistSq((Vec4 *)tri->v[0].pos, (Vec4 *)cam);
             dist[1] = Vec3_DistSq((Vec4 *)tri->v[1].pos, (Vec4 *)cam);
             dist[2] = Vec3_DistSq((Vec4 *)tri->v[2].pos, (Vec4 *)cam);
+#endif
+#ifdef PORT_VITA
+            {   /* (port, Vita) a triangle the clipping path below would leave nothing of: not prepared at all. The
+                   reflecting surface's far triangles (drawn unclipped) go on as before. */
+                extern int gVitaSurfCull;
+                s32 clipped = 1;
+                if ((flags & (EFT_SURF_CLIP | EFT_SURF_REFLECT)) == (EFT_SURF_CLIP | EFT_SURF_REFLECT)) {
+                    for (k = 0; k < 3; k++) {
+                        if ((dist[k] > distSq ? distSq : dist[k]) > 202500.0f) {
+                            clipped = 0; /* (not near: EftSurf_DrawReflectTri, no clipping) */
+                        }
+                    }
+                }
+                if (gVitaSurfCull && clipped && EftSurf_PortOutside(tri, gEftSurf->u.s.planes)) {
+                    gVitaSurfN[2]++;
+                    continue;
+                }
+            }
+#endif
             near = 1;
             for (k = 0; k < 3; k++) {
+#ifdef PORT_VITA
+                __builtin_memcpy(out[k].pos, tri->v[k].pos, 16);
+                __builtin_memcpy(out[k].st, tri->v[k].st, 16);
+                __builtin_memcpy(out[k].color, tri->v[k].color, 16);
+#else
                 ClipVtx_Set(&out[k], tri->v[k].pos, tri->v[k].st, tri->v[k].color);
+#endif
                 out[k].pos[3] = 1.0f;
                 out[k].st[2] = 1.0f;
                 out[k].st[3] = 1.0f;
@@ -1361,7 +1561,11 @@ void EftSurf_DrawMeshes(void) {
                     }
                     out[k].st[1] += v;
                 } else if (flags & EFT_SURF_REFLECT) {
+#ifdef PORT_VITA
+                    __builtin_memcpy(out[k].color, light, 16);
+#else
                     Vec4_Copy((Vec4 *)out[k].color, (Vec4 *)light);
+#endif
                     out[k].color[3] *= tri->v[k].color[3];
                     if (dist[k] > distSq) {
                         dist[k] = distSq;
@@ -1380,8 +1584,24 @@ void EftSurf_DrawMeshes(void) {
                     out[k].st[1] += v;
                     out[k].color[3] *= fade;
                 }
+#ifdef PORT_VITA
+                EftV_Scale3(out[k].color, bright);
+#else
                 Vec3_Scale((Vec4 *)out[k].color, (Vec4 *)out[k].color, bright);
+#endif
             }
+#ifdef PORT_VITA
+            /* (by the way it is drawn: 3 reflecting and clipped, 4 reflecting, 5 clipped (DrawTri*), 6 the
+               ordering table's reflecting (DrawPolyOtClipped), 7 the ordering table's (DrawTriOtClipped); no clock reads
+               per triangle: one takes a microsecond) */
+            gVitaSurfN[(flags & (EFT_SURF_CLIP | EFT_SURF_REFLECT)) == (EFT_SURF_CLIP | EFT_SURF_REFLECT) ? (near ? 3 : 4)
+                       : (flags & EFT_SURF_CLIP) ? 5 : (flags & EFT_SURF_REFLECT) ? 6 : 7]++;
+            if (gVitaSurfMeas) {
+                surfC2 = Vita_SurfCyc();
+                gVitaSurfCyc[0] += surfC2 - surfC1;
+                surfC1 = surfC2;
+            }
+#endif
             if ((flags & (EFT_SURF_CLIP | EFT_SURF_REFLECT)) == (EFT_SURF_CLIP | EFT_SURF_REFLECT)) {
                 if (near) {
                     EftSurf_DrawReflectTriClipped(out, tex, (Vec4 *)fog);
@@ -1399,10 +1619,28 @@ void EftSurf_DrawMeshes(void) {
             } else {
                 EftSurf_DrawTriOtClipped(out, layer, 1, 0, tex0, zBias);
             }
+#ifdef PORT_VITA
+            if (gVitaSurfMeas) {
+                gVitaSurfCyc[1] += Vita_SurfCyc() - surfC1;
+                gVitaSurfCyc[5]++;
+            }
+#endif
         }
     }
     EftSurf_EndDraw(0);
     Vu0Cur_Pop();
+#ifdef PORT_VITA
+    {
+        extern int gVitaSeaMark;
+        gVitaSeaMark = 0;
+    }
+    gVitaSurfUs[0] += SURF_T() - surfT0;
+    if (gVitaSurfMeas) {
+        gVitaSurfCyc[7] += Vita_SurfCyc() - surfC0;
+        gVitaSurfCyc[6]++;
+        gVitaSurfMeas = 0;
+    }
+#endif
 }
 
 #define EFT_F2RGBA(c) \
@@ -1624,6 +1862,9 @@ void EftSurf_DrawTriClipped(EftSurfVtx *tri, u64 tex0) {
     s32 count = 3;
     s32 i;
 
+#ifdef PORT_VITA
+    if (!EftSurf_PortInside(tri, plane))
+#endif
     for (i = 4; i >= 0; i--) {
         count = ClipPoly_ClipPlane(tri, plane, count);
         plane++;
@@ -1675,6 +1916,9 @@ void EftSurf_DrawReflectTriClipped(EftSurfVtx *tri, u64 *tex, Vec4 *fog) {
     s32 count = 3;
     s32 i;
 
+#ifdef PORT_VITA
+    if (!EftSurf_PortInside(tri, plane))
+#endif
     for (i = 4; i >= 0; i--) {
         count = ClipPoly_ClipPlane(tri, plane, count);
         plane++;
@@ -1791,6 +2035,9 @@ static inline void EftSurf_QueueTri(EftScreenPos *v0, EftScreenPos *v1, EftScree
     p->xyz2.y = v2->y;
     p->xyz2.z = v2->z;
     p->xyz2.f = 0xFF;
+#ifdef PORT_VITA
+    p->vif0 = 0x5EB00000u | (u32)l; /* (the log: a surface's ordering-table triangle; the word is not sent) */
+#endif
     if (z < 0) {
         e = &gOtZ[0].layer[l];
     } else if (z >= 0x1000) {
@@ -1818,13 +2065,33 @@ void EftSurf_DrawTriOtClipped(EftSurfVtx *tri, s32 layer, s32 unused, s32 flipZ,
     Vec4 *plane = gEftSurf->u.s.planes;
     s32 count = 3;
     s32 i;
+#ifdef PORT_VITA
+    unsigned c0 = gVitaSurfMeas ? Vita_SurfCyc() : 0, c1;
+#endif
 
+#ifdef PORT_VITA
+    if (!EftSurf_PortInside(tri, plane))
+#endif
     for (i = 4; i >= 0; i--) {
         count = ClipPoly_ClipPlane(tri, plane, count);
         plane++;
     }
+#ifdef PORT_VITA
+    if (gVitaSurfMeas) {
+        c1 = Vita_SurfCyc();
+        gVitaSurfCyc[2] += c1 - c0;
+        c0 = c1;
+    }
+#endif
     if (count != 0) {
         ClipPoly_ProjectCur((s32 (*)[4])xyz, st, tri, count);
+#ifdef PORT_VITA
+        if (gVitaSurfMeas) {
+            c1 = Vita_SurfCyc();
+            gVitaSurfCyc[3] += c1 - c0;
+            c0 = c1;
+        }
+#endif
         for (i = 2; i < count; i++) {
             s32 z = xyz[0].z >> 8;
 
@@ -1843,6 +2110,11 @@ void EftSurf_DrawTriOtClipped(EftSurfVtx *tri, s32 layer, s32 unused, s32 flipZ,
             EftSurf_QueueTri(&xyz[0], &xyz[i - 1], &xyz[i], tri[0].color, tri[i - 1].color, tri[i].color, &st[0],
                              &st[i - 1], &st[i], layer, z - zBias, tex0);
         }
+#ifdef PORT_VITA
+        if (gVitaSurfMeas) {
+            gVitaSurfCyc[4] += Vita_SurfCyc() - c0;
+        }
+#endif
     }
 }
 

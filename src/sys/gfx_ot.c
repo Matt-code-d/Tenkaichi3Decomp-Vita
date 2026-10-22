@@ -173,6 +173,164 @@ s32 Ot_Draw(void) {
     return Ot_Reset();
 }
 
+#ifdef PORT_VITA
+/* The sea of Kame House is ~900 triangles a frame, each queued twice in the slot of its depth: once in
+   layer 0 (blended over the picture) and once in layer 1 (added). Sent in the table's order, the two blend modes take
+   turns slot after slot, and the renderer has to begin a new batch of triangles at every turn (500 a picture, the
+   drawing thread's time there). Where the table holds nothing but the sea's triangles and the slots' head packets
+   between two other packets, every triangle of layer 0 of that stretch is sent first and then every one of layer 1:
+   a surface in one plane covers each pixel once, so no pixel sees its passes in another order (and the additions
+   are clamped per pixel as before). Each sea triangle sets its own PRIM and TEX0 (its palette loaded each time, which
+   is checked); what the GS holds after the stretch is put back as the original order leaves it: the last head packet
+   (the blend of the layer), then PRIM, TEX0, RGBAQ and ST of the stretch's last triangle. bt3.txt searun=0: off. */
+int gVitaSeaRun = 1;
+int gVitaSeaMark;
+unsigned gVitaOtRun[6]; /* (the log) sea packets; stretches put together, their packets; stretches left; other packets after a stretch */
+#define OT_SEA_L0 0x5EA00000u
+static s32 Ot_IsHead(OtPrim *p) {
+    s32 l;
+    for (l = 0; l < OT_LAYER_COUNT; l++) {
+        if ((u8 *)p >= (u8 *)gOt->headBuf[l] && (u8 *)p < (u8 *)gOt->headBuf[l] + OT_SLOT_COUNT * OT_HEAD_SIZE) {
+            return 1 + l;
+        }
+    }
+    return 0;
+}
+static s32 Ot_IsSea(OtPrim *p) {
+    return p->qwc == 7 && (p->vif[0] & ~1u) == OT_SEA_L0 ? 1 + (s32)(p->vif[0] & 1) : 0;
+}
+static u8 *Ot_Copy(u8 *dst, OtPrim *p) {
+    memcpy(dst, p + 1, p->qwc << 4);
+    return dst + (p->qwc << 4);
+}
+extern void Vita_Log(const char *fmt, ...);
+extern int snprintf(char *s, unsigned n, const char *fmt, ...);
+/* the table's packets in order, by kind, run-length: a = head of layer 0, b = of layer 1, S / s = the
+   sea's layer 0 / 1, P / p = another surface's, o<qwc> = anything else */
+static void Ot_LogKinds(void) {
+    char line[1000];
+    s32 len = 0, run = 0, n = 0;
+    char last = 0;
+    u32 lastQ = 0;
+    OtPrim *p;
+    for (p = gOtHead; p != NULL; p = p->next) {
+        s32 h = Ot_IsHead(p);
+        char c = h == 1 ? 'a' : h == 2 ? 'b' : (p->vif[0] & ~1u) == OT_SEA_L0 ? ((p->vif[0] & 1) ? 's' : 'S')
+               : (p->vif[0] & ~1u) == 0x5EB00000u ? ((p->vif[0] & 1) ? 'p' : 'P') : 'o';
+        n++;
+        if (c == last && (c != 'o' || p->qwc == lastQ)) {
+            run++;
+            continue;
+        }
+        if (last != 0 && len < (s32)sizeof(line) - 24) {
+            len += last == 'o' ? snprintf(line + len, sizeof(line) - (unsigned)len, "o%u", lastQ) : snprintf(line + len, sizeof(line) - (unsigned)len, "%c", last);
+            if (run > 1) {
+                len += snprintf(line + len, sizeof(line) - (unsigned)len, "%d", run);
+            }
+            line[len++] = ' ';
+            line[len] = 0;
+        }
+        last = c;
+        lastQ = p->qwc;
+        run = 1;
+        if (len >= (s32)sizeof(line) - 24) {
+            Vita_Log("vita:   ot: %s\n", line);
+            len = 0;
+            line[0] = 0;
+        }
+    }
+    if (last != 0 && len < (s32)sizeof(line) - 24) {
+        len += snprintf(line + len, sizeof(line) - (unsigned)len, "%c%d", last, run);
+    }
+    Vita_Log("vita:   ot: %s (%d packets)\n", line, n);
+}
+static u8 *Ot_SendRuns(u8 *dst) {
+    OtPrim *p = gOtHead, *q, *r, *lastHead, *lastSea, *firstHead[2];
+    s32 n[2], ok, k;
+    static u32 frames;
+
+    if (++frames == 1500 || frames == 3300) {
+        Ot_LogKinds();
+    }
+
+    while (p != NULL) {
+        if (!Ot_IsHead(p)) {
+            if (Ot_IsSea(p)) {
+                gVitaOtRun[0]++;
+            }
+            dst = Ot_Copy(dst, p);
+            p = p->next;
+            continue;
+        }
+        /* a stretch from this head: heads and sea triangles only */
+        n[0] = n[1] = 0;
+        firstHead[0] = firstHead[1] = NULL;
+        lastHead = NULL;
+        lastSea = NULL;
+        ok = 1;
+        for (q = p; q != NULL; q = q->next) {
+            s32 h = Ot_IsHead(q), sea = h ? 0 : Ot_IsSea(q);
+            if (h) {
+                if (firstHead[h - 1] == NULL) {
+                    firstHead[h - 1] = q;
+                }
+                lastHead = q;
+            } else if (sea) {
+                const u64 *g = (const u64 *)(q + 1);
+                n[sea - 1]++;
+                lastSea = q;
+                if ((g[3] >> 61) != 1) {
+                    ok = 0; /* (a palette not loaded by the triangle itself: the order would matter) */
+                }
+            } else {
+                break;
+            }
+        }
+        gVitaOtRun[0] += n[0] + n[1];
+        if (q != NULL) {
+            gVitaOtRun[4]++;
+            if ((q->vif[0] & ~1u) == 0x5EB00000u) {
+                gVitaOtRun[5]++; /* (another surface's triangle) */
+            }
+        }
+        if (n[0] + n[1] < 4 || n[0] == 0 || n[1] == 0 || !ok || firstHead[0] == NULL || firstHead[1] == NULL) {
+            if (n[0] + n[1] >= 4 && !ok) {
+                gVitaOtRun[3]++;
+            }
+            for (r = p; r != q; r = r->next) {
+                dst = Ot_Copy(dst, r);
+            }
+            p = q;
+            continue;
+        }
+        gVitaOtRun[1]++;
+        gVitaOtRun[2] += n[0] + n[1];
+        for (k = 0; k < 2; k++) {
+            dst = Ot_Copy(dst, firstHead[k]);
+            for (r = p; r != q; r = r->next) {
+                if (Ot_IsSea(r) == k + 1) {
+                    dst = Ot_Copy(dst, r);
+                }
+            }
+        }
+        dst = Ot_Copy(dst, lastHead);
+        {   /* the stretch's last triangle's PRIM, TEX0, RGBAQ and ST */
+            const u64 *g = (const u64 *)(lastSea + 1); /* tag, regs, PRIM, TEX0, then 3 x (RGBAQ, ST, XYZF2) */
+            u64 *o = (u64 *)dst;
+            o[0] = 0x1000000000000004ull;     /* GIF tag: NLOOP 4, NREG 1, PACKED (A+D) */
+            o[1] = 0xE;                       /* A+D */
+            o[2] = g[2]; o[3] = 0x00;          /* PRIM */
+            o[4] = g[3]; o[5] = (g[1] >> 4) & 0xF; /* TEX0_1 or TEX0_2, as the triangle has it */
+            o[6] = g[10]; o[7] = 0x01;         /* RGBAQ of its third corner */
+            o[8] = g[11]; o[9] = 0x02;         /* ST */
+            dst += 5 * 16;
+        }
+        p = q;
+    }
+    return dst;
+}
+#endif
+
 /* Copies the GIF data of every linked packet into the display list, between the sorted-pass state and its restore. */
 s32 Ot_Send(void) {
     OtPrim *prim;
@@ -183,6 +341,11 @@ s32 Ot_Send(void) {
     }
     Ot_AddEnv(0);
     dst = (u8 *)Dma_BeginDirect();
+#ifdef PORT_VITA
+    if (gVitaSeaRun) {
+        dst = Ot_SendRuns(dst);
+    } else
+#endif
     for (prim = gOtHead; prim != NULL; prim = prim->next) {
         memcpy(dst, prim + 1, prim->qwc << 4);
         dst += prim->qwc << 4;

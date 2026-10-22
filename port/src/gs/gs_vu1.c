@@ -11,6 +11,19 @@
  * delay of the clipping flags are modelled (the programs read them), MAC / status flags are not (never read).
  * Arithmetic is the host's float unit with infinities and NaNs clamped: this is drawing, not simulation.
  */
+#ifdef PORT_VITA
+/* This file is the list reader's side: when the GS back end runs on a thread of its own (gs_core.c, "split"),
+   everything handed to the GS goes through the front end's queue, and this side keeps its own copies of the
+   flags it shares with the back end. */
+#define gVitaGsSkip gVitaGsSkipF
+#define gVglVertsStable gVglVertsStableF
+#define gVglSamePos gVglSamePosF
+#define Gs_Gif GsFE_Gif
+#define Gs_RegWrite GsFE_RegWrite
+#define GsGpu_DrawVu0 GsFE_DrawVu0
+#define GsGpu_DrawVu4 GsFE_DrawVu4
+#define GsGpu_DrawVu6 GsFE_DrawVu6
+#endif
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -58,14 +71,14 @@ static inline float clampf(float v) {
 
 /* ---------------------------------------------------------------------------------------------- VIF1 side */
 
-void GsVu1_SetCycle(uint32_t cl, uint32_t wl) { vu.cl = cl; vu.wl = wl; }
-void GsVu1_SetBase(uint32_t v) { vu.base = v & 0x3FF; }
-void GsVu1_SetOffset(uint32_t v) { vu.ofst = v & 0x3FF; vu.dbf = 0; vu.tops = vu.base; }
-void GsVu1_SetItop(uint32_t v) { vu.itops = v & 0x3FF; }
-void GsVu1_SetMode(uint32_t v) { vu.mode = v & 3; }
-void GsVu1_SetMask(uint32_t v) { vu.mask = v; }
-void GsVu1_SetRow(const uint32_t *v) { memcpy(vu.row, v, 16); }
-void GsVu1_SetCol(const uint32_t *v) { memcpy(vu.col, v, 16); }
+__attribute__((hot)) void GsVu1_SetCycle(uint32_t cl, uint32_t wl) { vu.cl = cl; vu.wl = wl; }
+__attribute__((hot)) void GsVu1_SetBase(uint32_t v) { vu.base = v & 0x3FF; }
+__attribute__((hot)) void GsVu1_SetOffset(uint32_t v) { vu.ofst = v & 0x3FF; vu.dbf = 0; vu.tops = vu.base; }
+__attribute__((hot)) void GsVu1_SetItop(uint32_t v) { vu.itops = v & 0x3FF; }
+__attribute__((hot)) void GsVu1_SetMode(uint32_t v) { vu.mode = v & 3; }
+__attribute__((hot)) void GsVu1_SetMask(uint32_t v) { vu.mask = v; }
+__attribute__((hot)) void GsVu1_SetRow(const uint32_t *v) { memcpy(vu.row, v, 16); }
+__attribute__((hot)) void GsVu1_SetCol(const uint32_t *v) { memcpy(vu.col, v, 16); }
 
 void GsVu1_Program(uint32_t addr, const uint32_t *words, uint32_t count) {
     uint32_t i;
@@ -75,6 +88,105 @@ void GsVu1_Program(uint32_t addr, const uint32_t *words, uint32_t count) {
         memcpy(&vu.micro[((addr * 8) + i * 4) & 0x3FFC], &words[i], 4);
     }
 }
+
+#ifdef PORT_VITA
+/* A batch's vectors are not copied into VU memory when they arrive (four 32-bit words each, one after the other,
+   addressed from TOPS: a fighter's and the stage's strips, 1.8 MB a frame, and it is reading them from memory that
+   costs). Where they lie in the display list is noted; the program hand-offs below read them there (vview), and
+   the strips are transformed from there. Anything else that reads or writes that part of VU memory has them
+   copied first, so VU memory is always what it would have been. The notes end with the frame's list. */
+typedef struct Lz { uint32_t a, n; const uint8_t *src; } Lz;
+#define LZ_MAX 12
+static Lz sLz[LZ_MAX];
+static int sLzCount;
+int gVitaLazyUnpack;         /* vita_vgl.c switches it on */
+int gVitaUnpackVolatile;     /* gs_core.c: the data of the unpack in hand is a collected copy, not the list */
+extern int gVglVertsStable;  /* for vita_vgl.c: the vertices of the strip handed over now stay where they are */
+unsigned gVitaLz[3];         /* for the log: vectors noted, copied after all, strips read in place */
+
+static void lz_copy(const Lz *e, uint32_t from, uint32_t to) { /* vectors from .. to of VU memory */
+    if (from < to) {
+        memcpy(&vu.mem[from * 16], e->src + (from - e->a) * 16, (to - from) * 16);
+        gVitaLz[1] += to - from;
+    }
+}
+
+/* VU memory a .. a + n is about to be read (keep = 0) or written whole by a new note (keep = 1: only what the
+   new one does not cover is copied). */
+__attribute__((hot)) static void lz_settle(uint32_t a, uint32_t n, int keep) {
+    int i;
+
+    for (i = 0; i < sLzCount; ) {
+        Lz *e = &sLz[i];
+        if (e->a < a + n && a < e->a + e->n) {
+            if (keep) {
+                /* what the new note does not cover stays noted (a batch shorter than the one before it at the same
+                   place: the rest of the old one is still what VU memory holds there), or is copied if there is no
+                   room for more notes */
+                Lz old = *e;
+                uint32_t end = old.a + old.n;
+                *e = sLz[--sLzCount];
+                if (old.a < a) {
+                    if (sLzCount < LZ_MAX - 2) {
+                        sLz[sLzCount].a = old.a; sLz[sLzCount].n = a - old.a; sLz[sLzCount].src = old.src; sLzCount++;
+                    } else {
+                        lz_copy(&old, old.a, a);
+                    }
+                }
+                if (a + n < end) {
+                    if (sLzCount < LZ_MAX - 2) {
+                        sLz[sLzCount].a = a + n; sLz[sLzCount].n = end - (a + n); sLz[sLzCount].src = old.src + (a + n - old.a) * 16; sLzCount++;
+                    } else {
+                        lz_copy(&old, a + n, end);
+                    }
+                }
+                continue; /* (the entry moved into this place is looked at next; the pieces added lie outside a .. a + n) */
+            } else {
+                lz_copy(e, e->a, e->a + e->n);
+            }
+            *e = sLz[--sLzCount];
+        } else {
+            i++;
+        }
+    }
+}
+
+static void lz_all(void) {
+    if (sLzCount != 0) {
+        lz_settle(0, 1024, 0);
+    }
+}
+
+/* n vectors from vector `a` on, to read: where they lie in the list if one note holds them all (*stable = 1),
+   else VU memory with everything noted for them copied in. */
+__attribute__((hot)) static const uint8_t *vview(uint32_t a, uint32_t n, int *stable) {
+    int i;
+
+    if (stable != NULL) {
+        *stable = 0;
+    }
+    for (i = 0; i < sLzCount; i++) {
+        if (sLz[i].a <= a && a + n <= sLz[i].a + sLz[i].n) {
+            if (stable != NULL) {
+                *stable = 1;
+            }
+            return sLz[i].src + (a - sLz[i].a) * 16;
+        }
+    }
+    if (sLzCount != 0) {
+        lz_settle(a, n, 0);
+    }
+    return &vu.mem[a * 16];
+}
+#else
+static const uint8_t *vview(uint32_t a, uint32_t n, int *stable) {
+    (void)n;
+    if (stable != NULL) {
+        *stable = 0;
+    }
+    return &vu.mem[a * 16];
+}
+#endif
 
 /* Words of data an UNPACK command with these parameters is followed by. */
 uint32_t GsVu1_UnpackWords(uint32_t cmd, uint32_t num) {
@@ -87,12 +199,69 @@ uint32_t GsVu1_UnpackWords(uint32_t cmd, uint32_t num) {
     return (n * bits + 31) / 32;
 }
 
-void GsVu1_Unpack(uint32_t cmd, uint32_t num, uint32_t imm, const uint32_t *data) {
+__attribute__((hot)) void GsVu1_Unpack(uint32_t cmd, uint32_t num, uint32_t imm, const uint32_t *data) {
     uint32_t vn = (cmd >> 2) & 3, vl = cmd & 3, masked = (cmd >> 4) & 1, usn = (imm >> 14) & 1;
     uint32_t addr = (imm & 0x3FF) + ((imm >> 15) & 1 ? vu.tops : 0), n = num ? num : 256;
     uint32_t cl = vu.cl ? vu.cl : 1, wl = vu.wl ? vu.wl : 1, cyc = 0, bitpos = 0, k, c;
     const uint8_t *src = (const uint8_t *)data;
 
+#ifdef PORT_VITA
+    /* The two cases nearly every vector of a fight comes in (30,000 vertices a frame, three vectors each, on every
+       frame whether it is drawn or not): four 32-bit words, or 2 / 3 of them, written as they are - no mask, no
+       offset, no filling write. The general loop below costs some 200 instructions a vector. */
+    {
+        extern unsigned gVitaUnpack[2];
+        if (!masked && vu.mode == 0 && wl <= cl && vl == 0) {
+            uint32_t words = vn + 1;
+            if (words == 4 && wl == cl && (imm & 0x8000) && n >= 6 && (addr & 0x3FF) + n <= 1024 && gVitaLazyUnpack && !gVitaUnpackVolatile) {
+                Lz *e;
+                addr &= 0x3FF;
+                lz_settle(addr, n, 1);
+                if (sLzCount == LZ_MAX) {
+                    lz_settle(sLz[0].a, sLz[0].n, 0);
+                }
+                e = &sLz[sLzCount++];
+                e->a = addr;
+                e->n = n;
+                e->src = src;
+                gVitaLz[0] += n;
+                gVitaUnpack[0] += n;
+                return;
+            }
+            if (sLzCount != 0) { /* (what this writes over is settled first; more than it can touch) */
+                uint32_t a0 = addr & 0x3FF, span = n * cl;
+                if (a0 + span > 1024) {
+                    lz_all();
+                } else {
+                    lz_settle(a0, span, 0);
+                }
+            }
+            for (k = 0; k < n; k++) {
+                uint32_t *o = (uint32_t *)(void *)&vu.mem[(addr & 0x3FF) * 16];
+                if (words == 4) {
+                    memcpy(o, src, 16);
+                } else if (words == 1) {
+                    uint32_t w;
+                    memcpy(&w, src, 4);
+                    o[0] = o[1] = o[2] = o[3] = w;
+                } else {
+                    memcpy(o, src, words * 4);
+                    memset(o + words, 0, (4 - words) * 4);
+                }
+                src += words * 4;
+                addr++;
+                if (++cyc == wl) {
+                    addr += cl - wl;
+                    cyc = 0;
+                }
+            }
+            gVitaUnpack[0] += n;
+            return;
+        }
+        gVitaUnpack[1] += n;
+        lz_all();
+    }
+#endif
     for (k = 0; k < n; k++) {
         uint32_t v[4] = {0, 0, 0, 0}, out[4];
         int have = !(wl > cl && cyc >= cl); /* filling write: vectors beyond CL come from the registers only */
@@ -181,6 +350,9 @@ static void kick(uint32_t addr) {
 
 /* Runs the program at instruction `start` until its end (E bit). */
 static void run(uint32_t start) {
+#ifdef PORT_VITA
+    lz_all(); /* the interpreter reads VU memory itself */
+#endif
     int ending = 0, branch = 0;
     uint32_t target = 0, guard;
 
@@ -450,24 +622,66 @@ upper_done:
    shaders/vu0.vert. Layout of the batch (verified on dumps): +0 GIF tag "one A+D register", +1 TEX0_1 of the
    texture layer, +2 TEX0_2 of the toon layer, +3 / +4 the primitive tags of the two layers (NLOOP = vertices,
    PRIM in the tag), +5 the vertices, three quadwords each. */
-static int hle_program0(void) {
+#ifdef PORT_VITA
+extern volatile int gVitaZoneOn;
+void Vita_Z(int z);
+#define ZM(z) do { if (gVitaZoneOn) { Vita_Z(z); } } while (0)
+#define VSTABLE(st) (gVglVertsStable = (st), gVitaLz[2] += (unsigned)(st))
+#define VSETTLE(a, n) do { if (sLzCount != 0) { lz_settle((a), (n), 0); } } while (0)
+#else
+#define ZM(z) ((void)0)
+#define VSETTLE(a, n) ((void)0)
+#define VSTABLE(st) ((void)(st))
+#endif
+/* A batch's head: a GIF tag "one A+D register" and that register (the texture). Written straight to the register
+   (the GIF parser for one register was a tenth of a program call); anything else goes through the parser. */
+__attribute__((hot)) static void gif_ad(const uint8_t *p) {
+    uint64_t tag[2], ad[2];
+    memcpy(tag, p, 16);
+    if ((tag[0] & 0x7FFF) == 1 && !((tag[0] >> 46) & 1) && ((tag[0] >> 58) & 3) == 0 && (tag[0] >> 60) == 1 && (tag[1] & 0xF) == 0xE) {
+        memcpy(ad, p + 16, 16);
+        Gs_RegWrite((uint32_t)(ad[1] & 0xFF), ad[0]);
+    } else {
+        Gs_Gif(p, 2);
+    }
+}
+
+__attribute__((hot)) static int hle_program0(void) {
     uint8_t pkt[32];
     uint64_t tag[2];
     uint32_t top = vu.top & 0x3FF, count;
-    int layer;
+    const uint8_t *b, *k, *h; /* the batch's head and its vertices: often two pieces of the list */
+    int layer, stable;
 
-    memcpy(tag, &vu.mem[(top + 3) * 16], 16);
+    memcpy(tag, vview(top + 3, 1, NULL), 16);
     count = (uint32_t)(tag[0] & 0x7FFF);
     if (count < 3 || top + 5 + count * 3 > 1024) {
         return 0;
     }
+    k = vview(0, 32, NULL);
+    h = vview(top, 5, NULL);
+    b = vview(top + 5, count * 3, &stable);
+    ZM(3);
+#ifdef PORT_VITA
+    {   /* both layers as one record for the drawing thread (gs_core.c), when the batch is as usual */
+        extern int GsFE_DrawVu0Pair(const uint8_t *h, const float *v, uint32_t count, const float *consts, int stable);
+        if (GsFE_DrawVu0Pair(h, (const float *)b, count, (const float *)k, stable)) {
+            gVitaLz[2] += 2u * (unsigned)stable;
+            sStatKicks++;
+            return 1;
+        }
+    }
+#endif
     for (layer = 0; layer < 2; layer++) {
-        memcpy(pkt, &vu.mem[top * 16], 16);
-        memcpy(pkt + 16, &vu.mem[(top + 1 + (uint32_t)layer) * 16], 16);
-        Gs_Gif(pkt, 2); /* the layer's TEX0 */
-        memcpy(tag, &vu.mem[(top + 3 + (uint32_t)layer) * 16], 16);
+        memcpy(pkt, h, 16);
+        memcpy(pkt + 16, h + (1 + (uint32_t)layer) * 16, 16);
+        gif_ad(pkt); /* the layer's TEX0 */
+        memcpy(tag, h + (3 + (uint32_t)layer) * 16, 16);
         Gs_RegWrite(0, (tag[0] >> 47) & 0x7FF); /* PRIM from the tag */
-        GsGpu_DrawVu0(layer, (int)((tag[0] >> 56) & 1), (const float *)&vu.mem[(top + 5) * 16], count, (const float *)vu.mem);
+        ZM(16);
+        { extern int gVglSamePos; gVglSamePos = layer == 1; }
+        VSTABLE(stable);
+        GsGpu_DrawVu0(layer, (int)((tag[0] >> 56) & 1), (const float *)b, count, (const float *)k);
     }
     sStatKicks++;
     return 1;
@@ -477,28 +691,38 @@ static int hle_program0(void) {
    program 0's layer 0 (model texture, colour from constant 22); layer 1 takes its texture from constant 26 and
    its coordinates from the normal in a camera-aligned frame (vu0.vert layer 5). A batch whose first normal has
    0 in the low 16 bits of its 4th word is not drawn. */
-static int hle_program1(void) {
+int gPortFadePass = 1; /* (test setting fadepass=) 0: program 1 not drawn; 2: its second layer twice */
+__attribute__((hot)) static int hle_program1(void) {
     uint8_t pkt[32];
     uint64_t tag[2];
     uint32_t top = vu.top & 0x3FF, count, mark;
-    int layer;
+    const uint8_t *b, *k, *h;
+    int layer, stable;
 
-    memcpy(tag, &vu.mem[(top + 3) * 16], 16);
+    memcpy(tag, vview(top + 3, 1, NULL), 16);
     count = (uint32_t)(tag[0] & 0x7FFF);
     if (count < 3 || top + 5 + count * 3 > 1024) {
         return 0;
     }
-    memcpy(&mark, &vu.mem[(top + 6) * 16 + 12], 4);
+    k = vview(0, 32, NULL);
+    h = vview(top, 5, NULL);
+    b = vview(top + 5, count * 3, &stable);
+    memcpy(&mark, b + 1 * 16 + 12, 4);
     if ((mark & 0xFFFF) == 0) {
         return 1;
     }
-    for (layer = 0; layer < 2; layer++) {
-        memcpy(pkt, &vu.mem[top * 16], 16);
-        memcpy(pkt + 16, layer == 0 ? &vu.mem[(top + 1) * 16] : &vu.mem[26 * 16], 16);
-        Gs_Gif(pkt, 2); /* the layer's TEX0 */
-        memcpy(tag, &vu.mem[(top + 3 + (uint32_t)layer) * 16], 16);
+    if (gPortFadePass == 0) {
+        return 1;
+    }
+    for (layer = 0; layer < (gPortFadePass == 2 ? 3 : 2); layer++) {
+        memcpy(pkt, h, 16);
+        memcpy(pkt + 16, layer == 0 ? h + 16 : k + 26 * 16, 16);
+        gif_ad(pkt); /* the layer's TEX0 */
+        memcpy(tag, h + (3 + (uint32_t)(layer > 1 ? 1 : layer)) * 16, 16);
         Gs_RegWrite(0, (tag[0] >> 47) & 0x7FF); /* PRIM from the tag */
-        GsGpu_DrawVu0(layer == 0 ? 0 : 5, (int)((tag[0] >> 56) & 1), (const float *)&vu.mem[(top + 5) * 16], count, (const float *)vu.mem);
+        { extern int gVglSamePos; gVglSamePos = layer >= 1; }
+        VSTABLE(stable);
+        GsGpu_DrawVu0(layer == 0 ? 0 : 5, (int)((tag[0] >> 56) & 1), (const float *)b, count, (const float *)k);
     }
     sStatKicks++;
     return 1;
@@ -510,18 +734,24 @@ static int hle_program1(void) {
    quadwords each (position, colour as floats, texture coordinates). One batch is one strip. */
 static int sP4Batches; /* MSCNTs since the last MSCALF */
 
-static int hle_program4(void) {
+__attribute__((hot)) static int hle_program4(void) {
     uint64_t tag[2];
     uint32_t top = vu.top & 0x3FF, count;
+    const uint8_t *b, *k;
+    int stable;
 
-    memcpy(tag, &vu.mem[(top + 2) * 16], 16);
+    memcpy(tag, vview(top + 2, 1, NULL), 16);
     count = (uint32_t)(tag[0] & 0x7FFF);
     if (count < 3 || top + 3 + count * 3 > 1024) {
         return 0;
     }
-    Gs_Gif(&vu.mem[top * 16], 2);
+    k = vview(0, 32, NULL);
+    gif_ad(vview(top, 2, NULL));
+    b = vview(top + 3, count * 3, &stable);
     Gs_RegWrite(0, (tag[0] >> 47) & 0x7FF);
-    GsGpu_DrawVu4((int)((tag[0] >> 56) & 1), (const float *)&vu.mem[(top + 3) * 16], count, (const float *)vu.mem);
+    ZM(18);
+    VSTABLE(stable);
+    GsGpu_DrawVu4((int)((tag[0] >> 56) & 1), (const float *)b, count, (const float *)k);
     sStatKicks++;
     return 1;
 }
@@ -533,25 +763,65 @@ static int hle_program4(void) {
    A, 4..7 bone B, 8 / 9 pivots, 10 the colour, 11..14 the screen matrix. That is program 0's first layer with
    the constants in other places, so the same shader draws it. (2a also drops triangles with a vertex outside
    the view volume; the GPU clips them instead.) */
-static int hle_program2(void) {
+__attribute__((hot)) static int hle_program2(void) {
     float consts[96];
     uint64_t tag[2];
     uint32_t top = vu.top & 0x3FF, count;
+    const uint8_t *b;
+    int stable;
 
-    memcpy(tag, &vu.mem[(top + 4) * 16], 16);
+    memcpy(tag, vview(top + 4, 1, NULL), 16);
     count = (uint32_t)(tag[0] & 0x7FFF);
     if (count < 3 || top + 5 + count * 3 > 1024) {
         return 0;
     }
+#ifdef PORT_VITA
+    {   /* the renderer draws only into the picture itself, and these go into the shadow page (vita_vgl.c drops them):
+           while none of them has been drawn, they are not sent at all, only the registers they set (one in 64 still
+           is, so that the renderer can say if that changes) */
+        extern volatile int gVglL2Drawn;
+        extern int gGsSplit;
+        static unsigned n;
+        extern int gVitaBisect;
+        int skip = gGsSplit && !gVglL2Drawn && (++n & 63) != 0;
+        if (skip && gVitaBisect == 2) {
+            gif_ad(vview(top, 2, NULL)); /* (as before) */
+            Gs_RegWrite(0, (tag[0] >> 47) & 0x7FF);
+            sStatKicks++;
+            return 1;
+        }
+        if (skip) {
+            extern void GsFE_RegDefer(uint32_t addr, uint64_t d);
+            const uint8_t *p = vview(top, 2, NULL);
+            uint64_t t2[2], ad[2];
+            memcpy(t2, p, 16);
+            if ((t2[0] & 0x7FFF) == 1 && !((t2[0] >> 46) & 1) && ((t2[0] >> 58) & 3) == 0 && (t2[0] >> 60) == 1 && (t2[1] & 0xF) == 0xE) {
+                memcpy(ad, p + 16, 16);
+                GsFE_RegDefer((uint32_t)(ad[1] & 0xFF), ad[0]); /* (the last of a run of these is sent: gs_core.c) */
+            } else {
+                gif_ad(p);
+            }
+            GsFE_RegDefer(0, (tag[0] >> 47) & 0x7FF);
+            sStatKicks++;
+            return 1;
+        }
+    }
+#endif
+    /* (the constants, 0..14, are read from VU memory below. Build 154: was 0..31, which took in the batch of the
+       first buffer, at 0x13 (program 2's BASE): every other batch was copied out of the list for that, and its
+       vertices with it - the drawing thread's general way for half of the silhouettes) */
+    VSETTLE(0, 15);
+    b = vview(top + 5, count * 3, &stable);
     memset(consts, 0, sizeof(consts));
     memcpy(&consts[0], &vu.mem[0], 10 * 16);          /* bones and pivots: as in program 0 */
     memcpy(&consts[56], &vu.mem[11 * 16], 4 * 16);    /* screen matrix: program 0 has it at 14..17 */
     memcpy(&consts[88], &vu.mem[10 * 16], 16);        /* colour: program 0's layer 0 colour at 22 */
-    Gs_Gif(&vu.mem[top * 16], 2);
+    gif_ad(vview(top, 2, NULL));
     Gs_RegWrite(0, (tag[0] >> 47) & 0x7FF); /* PRIM from the tag */
     /* the context is the one of the PRIM in force, not the tag's: the shadow passes run with PRMODECONT.AC = 0,
        where the attributes (texturing, blending, context) come from PRMODE and the tag only gives the type */
-    GsGpu_DrawVu0(2, (int)((gGs.prim >> 9) & 1), (const float *)&vu.mem[(top + 5) * 16], count, consts);
+    VSTABLE(stable);
+    GsGpu_DrawVu0(2, -1, (const float *)b, count, consts); /* (-1: the context of the PRIM in force, gs_core.c) */
     sStatKicks++;
     return 1;
 }
@@ -565,16 +835,22 @@ static int hle_program2(void) {
    texture coordinates). 8 is the fighters' two-matrix skinning with the colour of each vertex; 7 is rigid, takes
    its alpha from the mesh and does not draw a triangle whose last vertex carries a flag (low 16 bits of the
    position's 4th word). Both go through the fighter shader (vu0.vert, layers 3 and 4). */
-static int hle_program78(int layer) {
+__attribute__((hot)) static int hle_program78(int layer) {
     float consts[96];
     uint64_t tag[2];
     uint32_t top = vu.top & 0x3FF, count;
+    const uint8_t *b;
+    int stable;
 
-    memcpy(tag, &vu.mem[(top + 2) * 16], 16);
+    memcpy(tag, vview(top + 2, 1, NULL), 16);
     count = (uint32_t)(tag[0] & 0x7FFF);
     if (count < 3 || top + 3 + count * 3 > 1024) {
         return 0;
     }
+    /* (the constants are read from VU memory below: 0..13 for program 8 (BASE 0x12), 0..12 for program 7 (BASE
+       0xD). Build 154: was 0..31, which copied the first buffer's batch out of the list, as for program 2) */
+    VSETTLE(0, layer == 3 ? 14 : 13);
+    b = vview(top + 3, count * 3, &stable);
     memset(consts, 0, sizeof(consts));
     if (layer == 3) {
         memcpy(&consts[0], &vu.mem[0], 10 * 16);        /* matrices A, B and their pivots */
@@ -585,32 +861,55 @@ static int hle_program78(int layer) {
         memcpy(&consts[56], &vu.mem[4 * 16], 4 * 16);   /* screen matrix */
         memcpy(&consts[91], &vu.mem[12 * 16 + 12], 4);  /* the mesh's alpha */
     }
-    Gs_Gif(&vu.mem[top * 16], 2);
+    gif_ad(vview(top, 2, NULL));
     Gs_RegWrite(0, (tag[0] >> 47) & 0x7FF);
-    GsGpu_DrawVu0(layer, (int)((tag[0] >> 56) & 1), (const float *)&vu.mem[(top + 3) * 16], count, consts);
+    VSTABLE(stable);
+    GsGpu_DrawVu0(layer, (int)((tag[0] >> 56) & 1), (const float *)b, count, consts);
     sStatKicks++;
     return 1;
 }
 
 static int sP6Batches;
 
-static int hle_program6(void) {
+__attribute__((hot)) static int hle_program6(void) {
     uint64_t tag[2];
     uint32_t top = vu.top & 0x3FF, count;
+    const uint8_t *b, *k;
+    int stable;
 
-    memcpy(tag, &vu.mem[(top + 2) * 16], 16);
+    memcpy(tag, vview(top + 2, 1, NULL), 16);
     count = (uint32_t)(tag[0] & 0x7FFF);
     if (count < 3 || top + 3 + count * 4 > 1024) {
         return 0;
     }
     Gs_RegWrite(0, (tag[0] >> 47) & 0x7FF);
-    GsGpu_DrawVu6((int)((gGs.prim >> 9) & 1), (const float *)&vu.mem[(top + 3) * 16], count, (const float *)vu.mem);
+    k = vview(0, 32, NULL);
+    b = vview(top + 3, count * 4, &stable);
+    /* the ground shadow's triangles lie in the shadow's own packet (gfxm_e_b.c ObjShadow_Draw:
+       work->pkt[flip], two buffers in the game's heap), which the game writes again two frames later: the drawing
+       thread, a list or more behind the game, read some of them after that (the stage's triangles of a later frame
+       laid with this frame's matrices: dark triangles flickering on the ground). Copied now, with the list. */
+#ifdef PORT_VITA
+    {
+        extern int gGsSplit;
+        if (gGsSplit) {
+            stable = 0;
+        }
+    }
+#endif
+    VSTABLE(stable);
+    GsGpu_DrawVu6(-1, (const float *)b, count, (const float *)k);
     sStatKicks++;
     return 1;
 }
 
+#ifdef PORT_VITA /* the switches asked for at every call (20,000 a frame), answered without a call */
+#undef getenv
+extern int gVglVuReady;
+#define getenv(n) ((n)[7] == 'I' ? (gVglVuReady ? (char *)0 : (char *)"1") : (char *)0)
+#endif
 /* MSCAL / MSCALF (addr = instruction address) or MSCNT (addr < 0: continue where the last run stopped). */
-void GsVu1_Call(int addr) {
+__attribute__((hot)) void GsVu1_Call(int addr) {
     vu.top = vu.tops;
     vu.itop = vu.itops;
     if (vu.dbf) {
@@ -620,6 +919,15 @@ void GsVu1_Call(int addr) {
         vu.tops = vu.base + vu.ofst;
         vu.dbf = 1;
     }
+    ZM(2);
+#ifdef PORT_VITA /* a frame that is read but not drawn: the program's only output is what it would draw */
+    {
+        extern int gVitaGsSkip;
+        if (gVitaGsSkip) {
+            return;
+        }
+    }
+#endif
     if (getenv("BT3_VU_DUMP") != NULL && (int)gGsFrame == atoi(getenv("BT3_VU_DUMP")) && sProgSize == 127) {
         static int shown;
         if (shown < 3 && addr < 0) {
@@ -722,6 +1030,9 @@ void GsVu1_Call(int addr) {
 }
 
 void GsVu1_FrameEnd(void) {
+#ifdef PORT_VITA
+    lz_all(); /* the list the notes point into ends here */
+#endif
     int k, i;
 
     if (getenv("BT3_GS_VERBOSE") != NULL && (gGsFrame < 4 || gGsFrame % 60 == 0)) {
@@ -743,3 +1054,11 @@ void GsVu1_FrameEnd(void) {
         }
     }
 }
+
+#ifdef PORT_VITA
+/* gs_core.c (replayed calls): VU memory 0..31 (the strips' constants are 0..23; program 1 reads 26), the constants
+   the call packet unpacked, as a program sees them */
+const uint8_t *GsVu1_Consts(void) {
+    return vview(0, 32, NULL);
+}
+#endif

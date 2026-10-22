@@ -153,6 +153,10 @@ void Save_SetDefaults(SaveData *opt) {
         opt->keyEdit[i][5] = 5;
         opt->keyEdit[i][6] = 6;
         opt->keyEdit[i][7] = 7;
+#ifdef PORT_VITA
+        Save_PortDefaultKeys(opt->key[i]);
+        Save_PortDefaultKeys(opt->keyEdit[i]);
+#endif
     }
     opt->flags |= SAVE_FLAG_DEFAULT;
     opt->unk1694 = 0;
@@ -189,6 +193,52 @@ void Save_AddMoney(s32 amount) {
         gSaveData->money = 0;
     }
 }
+
+#ifdef PORT_VITA
+void Save_PortDefaultKeys(s32 *key) {
+    static const s32 kNormal[SAVE_KEY_COUNT] = {2, 1, 0, 3, 5, 4, 6, 7};
+    s32 i;
+
+    for (i = 0; i < SAVE_KEY_COUNT; i++) {
+        key[i] = kNormal[i];
+    }
+}
+
+s32 Save_PortKeysConsoleDefault(const s32 *key) {
+    static const s32 kConsole[SAVE_KEY_COUNT] = {2, 1, 0, 3, 4, 5, 6, 7};
+    s32 i;
+
+    for (i = 0; i < SAVE_KEY_COUNT; i++) {
+        if (key[i] != kConsole[i]) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+const s32 *Save_PortKeys(s32 pad, s32 *tmp) {
+    s32 seen = 0, i;
+
+    if (pad >= 0 && pad < SAVE_PAD_COUNT && gSaveData != NULL && (gSaveData->flags & SAVE_FLAG_PAD_B(pad))) {
+        /* a save made by an early version of this port with Custom chosen but the console's own set in it (nothing reassigned): the
+           handheld's Normal (Ki Charge on L) */
+        if (Save_PortKeysConsoleDefault(gSaveData->keyEdit[pad])) {
+            Save_PortDefaultKeys(gSaveData->keyEdit[pad]);
+        }
+        /* a custom set is used only when it is a whole assignment (each of the eight actions once) */
+        for (i = 0; i < SAVE_KEY_COUNT; i++) {
+            if (gSaveData->keyEdit[pad][i] >= 0 && gSaveData->keyEdit[pad][i] < SAVE_KEY_COUNT) {
+                seen |= 1 << gSaveData->keyEdit[pad][i];
+            }
+        }
+        if (seen == (1 << SAVE_KEY_COUNT) - 1) {
+            return gSaveData->keyEdit[pad];
+        }
+    }
+    Save_PortDefaultKeys(tmp);
+    return tmp;
+}
+#endif
 
 /* Restores the six rule settings at 0xC34 to 3, 2, 2, 0, 0, 0. */
 void Save_ResetRules(void) {

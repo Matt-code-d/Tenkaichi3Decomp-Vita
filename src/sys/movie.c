@@ -60,8 +60,13 @@ extern volatile u32 *Port_DmaChcr(s32 channel);
 #else
 #define D4_CHCR ((volatile u32 *)0x1000B400)
 #endif
+#ifdef PORT_VITA
+#define D4_MADR ((volatile u32 *)PORT_HW(0x1000B410))
+#define D4_QWC ((volatile u32 *)PORT_HW(0x1000B420))
+#else
 #define D4_MADR ((volatile u32 *)0x1000B410)
 #define D4_QWC ((volatile u32 *)0x1000B420)
+#endif
 
 #ifdef PORT
 #define UNCACHED(p) ((void *)(p)) /* no uncached mirror of memory on PC */
@@ -268,6 +273,9 @@ void Movie_Run(void) {
     s32 skip = 0;
 
     gMovieRunCount++;
+#ifdef PORT_VITA
+    { extern int gVitaInMovie; gVitaInMovie = 1; } /* (a tap on the touch screen skips it: port/vita/vita_touch.c) */
+#endif
     m = gMovie;
     mp = &m->mpeg;
     gMovieEsBuf = m->es;
@@ -322,6 +330,9 @@ void Movie_Run(void) {
     Dma_Flush();
     Gfx_EndFrame(1);
     Fade_Reset(0);
+#ifdef PORT_VITA
+    { extern int gVitaInMovie; gVitaInMovie = 0; }
+#endif
 }
 
 /* libmpeg stream callback: appends demuxed video data to the ring buffer; returns 0 when it does not fit. */

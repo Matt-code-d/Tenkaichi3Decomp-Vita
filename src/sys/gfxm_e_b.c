@@ -689,6 +689,14 @@ void ObjShadow_Free(ObjMdlObj *obj) {
 
 /* Restores the full-screen scissor and the renderer's normal state after the shadow passes. */
 void ObjShadow_ResetEnv(void) {
+#ifdef PORT_VITA
+    {
+        extern void Port_ShadowSilEnd(void);
+        extern void Port_GsMarker(s32 effect);
+        Port_ShadowSilEnd();
+        Port_GsMarker(0x2F); /* (Vita) the shadows are over: the page is no fighter's now */
+    }
+#endif
     Dma_AddScissor(0, 0x1FF, 0, 0x1BF);
     ObjGs_AddDefaultEnv();
 }
@@ -731,6 +739,27 @@ void ObjShadow_BeginRender(ObjMdlObj *obj) {
         ObjShadow_SetTarget(obj, work);
         ObjShadow_MakeLightMtx(obj, work);
         ObjShadow_MakeProjMtx(obj, work);
+#ifdef PORT_VITA
+        /* (Vita) No ground triangles under the object this frame, or the shadow faded out with the height: nothing
+           will be laid on the ground (ObjShadow_Draw draws no triangle, or draws them with alpha 0, which the alpha
+           test drops), so the silhouette is not drawn. On the Vita it is a whole second pass over the fighter. */
+        if (obj->shadow->count == 0 || !(obj->shadow->alpha > 0.0f)) {
+            return;
+        }
+        {   /* (Vita) the renderer keeps each shadow's silhouette in a place of its own (by the shadow's place
+               in the pool): on every other picture none is drawn and the shadow is laid with the one before (the
+               fighter's pose a picture old, where it is now). The marker tells the renderer which, in the list. */
+            extern int Port_ShadowSil(s32 slot);
+            extern void Port_GsMarker(s32 effect);
+            s32 slot = (s32)(obj->shadow - BtlObjPool3_Get()->nodes);
+
+            if (slot >= 0 && slot < OBJ_SHADOW_MAX && !Port_ShadowSil(slot)) {
+                Port_GsMarker(0x28 + slot); /* the shadow `slot` with the silhouette drawn before */
+                return;
+            }
+            Port_GsMarker(0x20 + (slot >= 0 && slot < OBJ_SHADOW_MAX ? slot : 5)); /* the silhouette of `slot`, drawn now */
+        }
+#endif
         ObjShadow_AddTargetEnv();
         ObjShadow_LoadProg(obj, work);
     }

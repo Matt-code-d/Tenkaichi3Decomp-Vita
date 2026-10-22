@@ -45,6 +45,16 @@ int __wrap_Progress_Main(int arg) {
         printf("bt3: battle finished\n");
         exit(0);
     }
+#ifdef PORT_VITA
+    {   /* The third archive (music, the fighters' voices, streamed sound effects) is opened by the first-run
+           sequence of the menus (src/menu/menu_i_c.c FirstRun_Main), which a test fight leaves out: its music and the
+           intros' lines were silent ("archive 2 file ... not found"). Opened here as the menus would. */
+        extern int File_LoadPartitionNw(int pt);
+        extern int File_WaitPartition(int pt);
+        File_LoadPartitionNw(2);
+        File_WaitPartition(2);
+    }
+#endif
     if (path != NULL) {
         static uint8_t buf[REPLAY_FILE_SIZE] __attribute__((aligned(16)));
         FILE *fp = fopen(path, "rb");
@@ -60,6 +70,39 @@ int __wrap_Progress_Main(int arg) {
             exit(2);
         }
         printf("bt3: replay %s\n", path);
+    } else if (getenv("BT3_DEMO_PICK") != NULL && atoi(getenv("BT3_DEMO_PICK")) >= 0 && atoi(getenv("BT3_DEMO_PICK")) <= 8) {
+        /* one of the attract demo's nine pairings, chosen (Demo_SetupBattle in src/battle/view_b_c.c draws it at
+           random, and the game's random numbers start the same every time: always the same pairing) */
+        static const int kPair[9][3] = {{0xA, 0x93, 0x1D}, {0x2A, 0x6C, 6}, {0x19, 0x5C, 2}, {0x27, 0x60, 1}, {0x17, 0x6F, 1},
+                                        {0x49, 0x5B, 0x10}, {0, 0x1E, 0x19}, {0x32, 0x72, 5}, {5, 0x25, 1}};
+        extern unsigned Rand_Range(unsigned n);
+        extern void BattleSetup_SetRule(int screenMode, int mode, int bgm, int timeLimit, int announcer, int stage, int unk10);
+        extern void BattleSetup_SetSide(int sideNo, int control, int pad, int memberCount, int unk1FC, int unk200, int lead, void *bits);
+        extern void BattleSetup_SetMember(int sideNo, int idx, int chara, int costume, int variant, int cpuLevel, float health, void *items);
+        extern void BattleSetup_Finish(void);
+        extern int CpuLevel_FromSetting(unsigned setting);
+        int pick = atoi(getenv("BT3_DEMO_PICK")), i;
+        int bgm = (int)Rand_Range(9) + 8;
+        /* BT3_DEMO_STAGE=<id>: on that stage instead; BT3_DEMO_CHARA1 / 2=<id>: those fighters;
+           BT3_DEMO_DUEL=1: as the Duel menu's COM against COM (mode 0: the fighters' intros, the announcer) */
+        int stage = getenv("BT3_DEMO_STAGE") != NULL ? atoi(getenv("BT3_DEMO_STAGE")) : kPair[pick][2];
+        int chara[2] = {getenv("BT3_DEMO_CHARA1") != NULL ? atoi(getenv("BT3_DEMO_CHARA1")) : kPair[pick][0],
+                        getenv("BT3_DEMO_CHARA2") != NULL ? atoi(getenv("BT3_DEMO_CHARA2")) : kPair[pick][1]};
+        int duel = getenv("BT3_DEMO_DUEL") != NULL && atoi(getenv("BT3_DEMO_DUEL")) != 0;
+
+        Battle_ClearWork();
+        if (duel) {
+            BattleSetup_SetRule(0, 0, bgm, 0, 1, stage, 1);
+        } else {
+            BattleSetup_SetRule(0, 7, bgm, 5, 4, stage, 0);
+        }
+        BattleSetup_SetSide(0, 2, 0, 1, 1, 1, 0, NULL);
+        BattleSetup_SetSide(1, 2, 1, 1, 1, 1, 0, NULL);
+        for (i = 0; i < 2; i++) {
+            BattleSetup_SetMember(i, 0, chara[i], 0, 0, CpuLevel_FromSetting(2), 100.0f, NULL);
+        }
+        BattleSetup_Finish();
+        printf("bt3: %s battle, pairing %d (characters %d and %d, stage %d)\n", duel ? "COM against COM duel" : "attract-demo", pick, chara[0], chara[1], stage);
     } else {
         Demo_SetupBattle();
         printf("bt3: attract-demo battle\n");
@@ -104,6 +147,7 @@ void Port_Trace(unsigned vblanks) {
     }
     /* BT3_AT=<tick>[,<tick>...]: when the battle clock first shows one of these tick counts, print the fight state
        and write the heap to port/build/heap_<tick>.bin (to compare with console save states made at those ticks). */
+#ifndef PORT_VITA /* the dumps below write memory at the PS2's addresses, where the PC builds have the heap */
     if ((sBattles != 0 || sFromMenu) && gBtlSeq != NULL && gBtlSeq->state >= 2 && getenv("BT3_AT") != NULL) {
         static unsigned last = 0xFFFFFFFFu;
         unsigned now = (unsigned)BtlSeq_GetClock()[0];
@@ -168,6 +212,7 @@ void Port_Trace(unsigned vblanks) {
             exit(0);
         }
     }
+#endif
     if ((sBattles != 0 || sFromMenu) && gBtlSeq != NULL && getenv("BT3_TRACE_SEQ") != NULL) { /* when the battle sequence changes state */
         static int last = -1;
         if (gBtlSeq->state != last) {

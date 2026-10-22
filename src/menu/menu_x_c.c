@@ -37,6 +37,13 @@ s32 Option_Init(s32 section) {
     memset(gOption, 0, sizeof(Option));
     gOption->pack = (u32 *)MPACK_AT(gMenuArc10, section);
     gOption->res = Sprite_Unpack(gOption->pack, NULL, NULL);
+#ifdef PORT_VITA
+    { /* the controller page for the Vita: the L2 / R2 touch row instead of vibration, a picture of the Vita
+         (port/vita/vita_optart.c) */
+        extern void Vita_OptionArt(void *res);
+        Vita_OptionArt(gOption->res);
+    }
+#endif
     /*
      * The rest of the function sits in a block that the compiler sees as a loop (`do { } while (0)`, most likely
      * from a macro), and the counter of the loop at the end is cleared here, not in its `for`: the original
@@ -165,6 +172,9 @@ s32 Option_Init(s32 section) {
             gOption->key[i][5] = 5;
             gOption->key[i][6] = 6;
             gOption->key[i][7] = 7;
+#ifdef PORT_VITA
+            Save_PortDefaultKeys(gOption->key[i]); /* the Normal type shown: the handheld's */
+#endif
         }
     } while (0);
     return 1;
@@ -189,8 +199,214 @@ s32 Option_Run(s32 section) {
     return 0;
 }
 
+#ifdef PORT_VITA
+/* The Vita has no vibration: that row of the controller page is "Touch Buttons", where L2, R2, L3 and R3 are touched
+   (below). Its guide lines (24, 39, 40) are spoken of vibration: their text is new (vita_optart.c), their voice is
+   not played. */
+extern void Voice_StopWithLip(void);
+static void Option_VoiceVita(s32 line) {
+    if (line == 24 || line == 39 || line == 40) {
+        Voice_StopWithLip();
+    } else {
+        Voice_PlayWithSubtitle(gOption->subtitles, OPTION_VOICE_BASE, line);
+    }
+}
+#define OPT_VOICE(line) Option_VoiceVita(line)
+#else
 #define OPT_VOICE(line) Voice_PlayWithSubtitle(gOption->subtitles, OPTION_VOICE_BASE, line)
+#endif
 #define OPT_PLATE(kind, label) Option_PlateGoto(0, kind, label)
+
+#ifdef PORT_VITA
+/* The control type page on the handheld. The console's page had a 1P / 2P row above Normal / Custom, and
+   from Normal / Custom only Up went back (Triangle did nothing there: the page seemed stuck). Here the page opens
+   on Normal / Custom of the first controller, Left / Right switch, Cross on Custom edits the buttons, and Cross on
+   Normal, Triangle, Circle or Up leave the page. The save is marked changed only when something did change. */
+static u32 sVitaKeysFlags;
+static s32 sVitaKeysEdit[SAVE_KEY_COUNT];
+
+static void Option_VitaKeysEnter(void) {
+    s32 i;
+
+    if (Save_PortKeysConsoleDefault(gSaveData->keyEdit[0])) {
+        /* (a save made by an early version of this port: the console's set as the custom one, nothing reassigned) the handheld's
+           Normal in its place, as the battle takes it (Save_PortKeys) */
+        Save_PortDefaultKeys(gSaveData->keyEdit[0]);
+    }
+    sVitaKeysFlags = gSaveData->flags & SAVE_FLAG_PAD_B(0);
+    for (i = 0; i < SAVE_KEY_COUNT; i++) {
+        sVitaKeysEdit[i] = gSaveData->keyEdit[0][i];
+    }
+    gOption->pad = 0;
+    gOption->keyEdit = 0;
+    gOption->keyOld = -1;
+    gOption->value = (gSaveData->flags & SAVE_FLAG_PAD_B(0)) ? 1 : 0;
+    gOption->valueOld = gOption->value;
+    OPT_PLATE(OPT_CLIP_KEY_OFF, "fl_on_start");
+    gOption->state = OPT_ST_KEYS_PAD;
+    Snd_PlaySe(1, 1);
+    gOption->voiceLine = gOption->value != 0 ? 31 : 30;
+    OPT_VOICE(gOption->voiceLine);
+}
+
+static void Option_VitaKeysLeave(void) {
+    s32 i;
+
+    if ((gSaveData->flags & SAVE_FLAG_PAD_B(0)) != sVitaKeysFlags) {
+        gOption->dirty = 1;
+    }
+    for (i = 0; i < SAVE_KEY_COUNT; i++) {
+        if (gSaveData->keyEdit[0][i] != sVitaKeysEdit[i]) {
+            gOption->dirty = 1;
+        }
+    }
+    /* key[] as the console kept it (the battle reads the type through Save_PortKeys) */
+    if (gSaveData->flags & SAVE_FLAG_PAD_B(0)) {
+        for (i = 0; i < SAVE_KEY_COUNT; i++) {
+            gSaveData->key[0][i] = gSaveData->keyEdit[0][i];
+        }
+    } else {
+        Save_PortDefaultKeys(gSaveData->key[0]);
+    }
+    OPT_PLATE(OPT_CLIP_KEY_OFF, "fl_ok");
+    gOption->keyEdit = 0;
+    gOption->keyOld = -1;
+    gOption->pad = 0;
+    gOption->value = 0; /* (the controller page's drawing takes it as the controller shown) */
+    gOption->state = OPT_ITEM_CTRL;
+    gOption->cursor = OPT_ITEM_KEYS;
+    gOption->voiceLine = 23;
+    OPT_VOICE(gOption->voiceLine);
+    OPT_PLATE(OPT_CLIP_ROW_CTRL, "fl_on_start");
+    Flash_GotoLabel(&gOption->flash[0], "fl_ctrl_out", 1);
+    Snd_PlaySe(1, 2);
+}
+
+/* "Touch Buttons", where each of L2, R2, L3 and R3 is touched: the rear pad's quarter, a corner of the front screen,
+   or nowhere (port/vita/vita_touch.c, which keeps it in ux0:data/bt3/touch.txt, not in the save). The four plates of
+   the console's two-way pickers show the buttons, laid out as the rear pad's quarters; Cross on one shows its places
+   Rear / Front / Off on them instead, the current one lit (Option_VitaTouchPlates). The guide line says where the
+   button under the cursor is, or would be. */
+extern int Vita_TouchGetSpot(int b);
+extern void Vita_TouchSetSpot(int b, int spot);
+extern s32 Vita_OptionGuide(const char *text);
+static s32 sVitaTouchLevel; /* 0 closed, 1 the four buttons, 2 the places of sVitaTouchBtn */
+static s32 sVitaTouchBtn;
+
+static void Option_VitaTouchGuide(void) {
+    static const char *const kName[4] = {"L2", "R2", "L3", "R3"};
+    static const char *const kQuarter[4] = {"upper left", "upper right", "lower left", "lower right"};
+    static const char *const kCorner[4] = {"bottom left", "bottom right", "top left", "top right"};
+    char text[112], more[64];
+    s32 b, spot;
+
+    if (sVitaTouchLevel == 2) { /* the place under the cursor */
+        b = sVitaTouchBtn;
+        spot = gOption->value;
+        if (spot == 0) {
+            sprintf(text, "%s on the rear touch pad's\n%s quarter, where a grip\nattachment's %s presses.", kName[b], kQuarter[b],
+                    kName[b]);
+        } else if (spot == 1) {
+            sprintf(text, "%s on the screen's %s\ncorner.", kName[b], kCorner[b]);
+        } else if (b < 2) {
+            sprintf(text, "%s not on the touch panels\n(SELECT + %c still gives it).", kName[b], kName[b][0]);
+        } else {
+            sprintf(text, "%s not on the touch panels.", kName[b]);
+        }
+    } else { /* the button under the cursor, and where it is now */
+        b = gOption->value;
+        spot = Vita_TouchGetSpot(b);
+        if (spot == 0) {
+            sprintf(more, "the rear touch pad's\n%s quarter", kQuarter[b]);
+        } else if (spot == 1) {
+            sprintf(more, "the screen's %s\ncorner", kCorner[b]);
+        } else {
+            sprintf(more, b < 2 ? "SELECT + %c only" : "not on the touch panels", kName[b][0]);
+        }
+        sprintf(text, "%s is %s.\nChoose a button to change it.", kName[b], more);
+    }
+    gOption->voiceLine = Vita_OptionGuide(text);
+    OPT_VOICE(gOption->voiceLine);
+}
+
+static void Option_VitaTouchMove(s32 to) {
+    OPT_PLATE(OPT_CLIP_PICK, "fl_off_start");
+    gOption->value = to;
+    OPT_PLATE(OPT_CLIP_PICK, "fl_on_start");
+    Snd_PlaySe(1, 0);
+    Option_VitaTouchGuide();
+}
+
+static void Option_VitaTouchOpen(void) {
+    OPT_PLATE(OPT_CLIP_ROW_CTRL, "fl_ok");
+    gOption->ctrlKind = 0;
+    gOption->picker = 5;
+    sVitaTouchLevel = 1;
+    Flash_GotoLabel(&gOption->flash[0], "fl_value_in", 1);
+    gOption->value = 0;
+    gOption->valueOld = 0;
+    OPT_PLATE(OPT_CLIP_PICK, "fl_on_start");
+    Snd_PlaySe(1, 1);
+    Option_VitaTouchGuide();
+}
+
+static void Option_VitaTouchInput(void) {
+    u32 pressed = gPad[0].gamePressed;
+    s32 v = gOption->value;
+
+    if (sVitaTouchLevel == 2) { /* Rear Front / Off */
+        if (pressed & (PADG_LEFT | PADG_RIGHT)) {
+            if (v < 2) {
+                Option_VitaTouchMove(v ^ 1);
+            }
+        } else if (pressed & PADG_DOWN) {
+            if (v < 2) {
+                Option_VitaTouchMove(2);
+            }
+        } else if (pressed & PADG_UP) {
+            if (v == 2) {
+                Option_VitaTouchMove(0);
+            }
+        } else if (pressed & (PADG_CROSS | PADG_TRIANGLE | PADG_CIRCLE)) { /* back to the buttons, the place chosen or not */
+            if (pressed & PADG_CROSS) {
+                Vita_TouchSetSpot(sVitaTouchBtn, v);
+                Snd_PlaySe(1, 1);
+            } else {
+                Snd_PlaySe(1, 2);
+            }
+            sVitaTouchLevel = 1;
+            Option_DimPickers();
+            gOption->value = sVitaTouchBtn;
+            OPT_PLATE(OPT_CLIP_PICK, "fl_on_start");
+            Option_VitaTouchGuide();
+        }
+    } else { /* L2 R2 / L3 R3 */
+        if (pressed & (PADG_LEFT | PADG_RIGHT)) {
+            Option_VitaTouchMove(v ^ 1);
+        } else if (pressed & (PADG_UP | PADG_DOWN)) {
+            Option_VitaTouchMove(v ^ 2);
+        } else if (pressed & PADG_CROSS) {
+            sVitaTouchBtn = v;
+            sVitaTouchLevel = 2;
+            Option_DimPickers();
+            gOption->value = Vita_TouchGetSpot(v);
+            OPT_PLATE(OPT_CLIP_PICK, "fl_on_start");
+            Snd_PlaySe(1, 1);
+            Option_VitaTouchGuide();
+        } else if (pressed & (PADG_TRIANGLE | PADG_CIRCLE)) { /* back to the page */
+            OPT_PLATE(OPT_CLIP_PICK, "fl_off_start");
+            Snd_PlaySe(1, 2);
+            sVitaTouchLevel = 0;
+            gOption->state = OPT_ITEM_CTRL;
+            gOption->cursor = OPT_ITEM_VIB;
+            Flash_GotoLabel(&gOption->flash[0], "fl_value_out", 1);
+            OPT_PLATE(OPT_CLIP_ROW_CTRL, "fl_on_start");
+            gOption->voiceLine = 24;
+            OPT_VOICE(gOption->voiceLine);
+        }
+    }
+}
+#endif
 
 /*
  * Pad 0, one state per frame; does nothing until the movie accepts input. Returns 0 when the screen is over
@@ -791,6 +1007,9 @@ s32 Option_Input(void) {
             gOption->pad = 0;
             Option_DimPickers();
             if (gOption->state == OPT_ITEM_VIB) {
+#ifdef PORT_VITA
+                Option_VitaTouchOpen(); /* "Touch Buttons" */
+#else
                 OPT_PLATE(OPT_CLIP_ROW_CTRL, "fl_ok");
                 gOption->ctrlKind = 0;
                 gOption->picker = 2;
@@ -798,15 +1017,22 @@ s32 Option_Input(void) {
                 OPT_PLATE(OPT_CLIP_PICK, "fl_on_start");
                 OPT_PLATE(OPT_CLIP_VIB_OFF, "fl_ok");
                 Snd_PlaySe(1, 1);
+#endif
             } else if (gOption->state == OPT_ITEM_KEYS) {
                 OPT_PLATE(OPT_CLIP_ROW_CTRL, "fl_ok");
                 gOption->ctrlKind = 1;
                 gOption->picker = 2;
                 Flash_GotoLabel(&gOption->flash[0], "fl_ctrl_in", 1);
+#ifdef PORT_VITA
+                /* one player on the handheld: no 1P / 2P row (Option_Draw hides it), the cursor straight
+                   on Normal / Custom of the first controller; Triangle, Circle or Up leave the page from there */
+                Option_VitaKeysEnter();
+#else
                 OPT_PLATE(OPT_CLIP_PICK, "fl_on_start");
                 gOption->pad = 0;
                 OPT_PLATE(OPT_CLIP_KEY_OFF, "fl_ok");
                 Snd_PlaySe(1, 1);
+#endif
             } else {
                 OPT_PLATE(OPT_CLIP_BOTTOM, "fl_ok");
             }
@@ -875,6 +1101,38 @@ s32 Option_Input(void) {
         }
         break;
     case OPT_ST_KEYS_PAD:
+#ifdef PORT_VITA
+        if (((gPad[0].gamePressed & PADG_LEFT) || (gPad[0].gamePressed & PADG_RIGHT)) && gOption->keyEdit == 0) {
+            OPT_PLATE(OPT_CLIP_KEY_OFF, "fl_off_start");
+            gOption->value ^= 1;
+            if (gSaveData->flags & SAVE_FLAG_PAD_B(0)) {
+                gSaveData->flags &= ~SAVE_FLAG_PAD_B(0);
+            } else {
+                gSaveData->flags |= SAVE_FLAG_PAD_B(0);
+                /* a save made by an early version of this port holds the console's Normal as its custom set: custom starts from
+                   the handheld's Normal instead */
+                if (Save_PortKeysConsoleDefault(gSaveData->keyEdit[0])) {
+                    Save_PortDefaultKeys(gSaveData->keyEdit[0]);
+                }
+            }
+            OPT_PLATE(OPT_CLIP_KEY_OFF, "fl_on_start");
+            Snd_PlaySe(1, 0);
+            gOption->voiceLine = gOption->value != 0 ? 31 : 30;
+            OPT_VOICE(gOption->voiceLine);
+        } else if ((gPad[0].gamePressed & PADG_CROSS) && gOption->value != 0 && (gSaveData->flags & SAVE_FLAG_PAD_B(0))) {
+            OPT_PLATE(OPT_CLIP_KEY_OFF, "fl_ok");
+            gOption->state = OPT_ST_KEYS_EDIT;
+            gOption->keyEdit = 1;
+            gOption->keyOld = -1;
+            gOption->keyRow = 3;
+            gOption->keyCursor = 2;
+            Option_SetKeyMark(gOption->keyRow);
+            Snd_PlaySe(1, 1);
+        } else if (gPad[0].gamePressed & (PADG_CROSS | PADG_TRIANGLE | PADG_CIRCLE | PADG_UP)) {
+            Option_VitaKeysLeave();
+        }
+        break;
+#endif
         if (((gPad[0].gamePressed & PADG_LEFT) || (gPad[0].gamePressed & PADG_RIGHT)) && gOption->keyEdit == 0) {
             OPT_PLATE(OPT_CLIP_KEY_OFF, "fl_off_start");
             gOption->value ^= 1;
@@ -963,7 +1221,11 @@ s32 Option_Input(void) {
                 gOption->keyCursor++;
             }
             Snd_PlaySe(1, 0);
-        } else if ((gPad[0].gamePressed & PADG_TRIANGLE) && gOption->keyOld < 0) {
+        } else if ((gPad[0].gamePressed & PADG_TRIANGLE
+#ifdef PORT_VITA
+                    || gPad[0].gamePressed & PADG_CIRCLE /* Circle backs out too */
+#endif
+                    ) && gOption->keyOld < 0) {
             /* original bug: address comparisons again, always true */
             if (gOption->key[0] != gSaveData->keyEdit[0] || gOption->key[1] != gSaveData->keyEdit[1]) {
                 gOption->dirty = 1;
@@ -1008,13 +1270,20 @@ s32 Option_Input(void) {
                 gOption->keyOld = gSaveData->keyEdit[gOption->pad][gOption->keyRow];
             }
         }
+#ifdef PORT_VITA
+/* every one of the eight actions in turn, both ways (the console's went 0..3 to the right, so an action
+   of the shoulder buttons reached another button only by the swap) */
+#define OPT_KEY_LAST (OPTION_KEY_NUM - 1)
+#else
+#define OPT_KEY_LAST 3
+#endif
         if ((gPad[0].gameHeld & PADG_CROSS) && (gPad[0].gamePressed & PADG_LEFT)) {
             if (--gSaveData->keyEdit[gOption->pad][gOption->keyRow] < 0) {
-                gSaveData->keyEdit[gOption->pad][gOption->keyRow] = 3;
+                gSaveData->keyEdit[gOption->pad][gOption->keyRow] = OPT_KEY_LAST;
             }
             Snd_PlaySe(1, 0);
         } else if ((gPad[0].gameHeld & PADG_CROSS) && (gPad[0].gamePressed & PADG_RIGHT)) {
-            if (++gSaveData->keyEdit[gOption->pad][gOption->keyRow] > 3) {
+            if (++gSaveData->keyEdit[gOption->pad][gOption->keyRow] > OPT_KEY_LAST) {
                 gSaveData->keyEdit[gOption->pad][gOption->keyRow] = 0;
             }
             Snd_PlaySe(1, 0);
@@ -1037,6 +1306,10 @@ s32 Option_Input(void) {
         }
         break;
     case OPT_ITEM_VIB:
+#ifdef PORT_VITA
+        Option_VitaTouchInput();
+        break;
+#endif
         if ((gPad[0].gamePressed & PADG_LEFT) || (gPad[0].gamePressed & PADG_RIGHT)) {
             OPT_PLATE(OPT_CLIP_VIB_OFF, "fl_off_start");
             OPT_PLATE(OPT_CLIP_PICK, "fl_off_start");
@@ -1301,6 +1574,107 @@ s32 Option_Input(void) {
                         Flash_FindLabel(flash, NULL, name, &ref); \
                         Flash_ClipSetUv(flash, &ref, &uv); \
                     }
+
+#ifdef PORT_VITA
+/* The control type page without its 1P / 2P row: the row's two plates hidden while the page is up (and
+   while it slides out), Normal / Custom moved up into its place (the offset the password screen uses for its
+   cursor: one plate's position minus the other's); both put back when the page is left. */
+extern void Flash_ClipGetPos(MFlash *flash, MFlashRef *ref, s32 *x, s32 *y);
+extern void Flash_ClipSetOffset(MFlash *flash, MFlashRef *ref, s32 x, s32 y);
+static s32 sVitaRowHidden;
+static s32 sVitaRowOff;
+
+static void Option_VitaKeysLayout(MFlash *flash) {
+    MFlashRef r1, r2, r3, r4;
+    s32 x1, y1, x3, y3, off;
+    s32 keys = gOption->state == OPT_ST_KEYS_PAD || gOption->state == OPT_ST_KEYS_EDIT || gOption->state == OPT_ITEM_KEYS ||
+               (gOption->state == OPT_ITEM_CTRL && gOption->ctrlKind == 1);
+
+    if (!keys && !sVitaRowHidden) {
+        return;
+    }
+    Flash_FindLabel(flash, NULL, "mc_select_plate_1", &r1);
+    Flash_FindLabel(flash, NULL, "mc_select_plate_2", &r2);
+    Flash_FindLabel(flash, NULL, "mc_select_plate_3", &r3);
+    Flash_FindLabel(flash, NULL, "mc_select_plate_4", &r4);
+    if (keys) {
+        Flash_ClipSetFlags(flash, &r1, 2, 0);
+        Flash_ClipSetFlags(flash, &r2, 2, 0);
+        sVitaRowHidden = 1;
+        off = 0;
+        if (r1.id >= 0 && r3.id >= 0 && r4.id >= 0) {
+            Flash_ClipGetPos(flash, &r1, &x1, &y1);
+            Flash_ClipGetPos(flash, &r3, &x3, &y3);
+            off = y1 - (y3 - sVitaRowOff); /* (GetPos counts the offset already given) */
+            if (off < -160 || off > 0) {
+                off = 0; /* (not the layout this was made for: left where it is) */
+            }
+            Flash_ClipSetOffset(flash, &r3, 0, off);
+            Flash_ClipSetOffset(flash, &r4, 0, off);
+        }
+        sVitaRowOff = off;
+    } else {
+        Flash_ClipSetFlags(flash, &r1, 2, 1);
+        Flash_ClipSetFlags(flash, &r2, 2, 1);
+        if (r3.id >= 0 && r4.id >= 0) {
+            Flash_ClipSetOffset(flash, &r3, 0, 0);
+            Flash_ClipSetOffset(flash, &r4, 0, 0);
+        }
+        sVitaRowHidden = 0;
+        sVitaRowOff = 0;
+    }
+}
+
+/* "Touch Buttons" (Option_VitaTouchInput): the four plates' captions, from the second caption strip (vita_optart.c:
+   rows 0 L2, 1 R2, 4 L3, 7 R3, 5 Rear, 6 Front) and the first one's OFF (row 1); the fourth plate is hidden while
+   the places are up, and shown again for the other pickers. */
+static s32 sVitaPlate4Hidden;
+
+static void Option_VitaTouchPlates(MFlash *flash) {
+    static const s8 kBtnRow[4] = {0, 1, 4, 7};
+    static const s8 kSpotRow[3] = {5, 6, 1};
+    MFlashRef ref;
+    MFlashUv uv;
+    char name[0x40];
+    s32 i, row, tex;
+
+    if (gOption->picker != 5) {
+        if (sVitaPlate4Hidden) {
+            Flash_FindLabel(flash, NULL, "mc_select_plate_4", &ref);
+            Flash_ClipSetFlags(flash, &ref, 2, 1);
+            sVitaPlate4Hidden = 0;
+        }
+        return;
+    }
+    for (i = 0; i < 4; i++) {
+        sprintf(name, "mc_select_plate_%d", i + 1);
+        Flash_FindLabel(flash, NULL, name, &ref);
+        if (sVitaTouchLevel == 2 && i == 3) {
+            Flash_ClipSetFlags(flash, &ref, 2, 0);
+            sVitaPlate4Hidden = 1;
+            continue;
+        }
+        Flash_ClipSetFlags(flash, &ref, 2, 1);
+        if (sVitaTouchLevel == 2) {
+            row = kSpotRow[i];
+            tex = i < 2;
+        } else {
+            row = kBtnRow[i];
+            tex = 1;
+        }
+        memset(&uv, 0, sizeof(uv));
+        uv.x1 = 0x100;
+        uv.y0 = row * 0x20;
+        uv.y1 = uv.y0 + 0x20;
+        Flash_FindLabel(flash, name, "mc_select_text_off", &ref);
+        Flash_ClipSetUv(flash, &ref, &uv);
+        Flash_ClipSetTex(flash, &ref, tex);
+        Flash_FindLabel(flash, name, "mc_select_text_on", &ref);
+        Flash_ClipSetUv(flash, &ref, &uv);
+        Flash_ClipSetTex(flash, &ref, tex);
+    }
+}
+#endif
 
 /* Per frame: sets up every clip of the movie from the screen's state and draws the screen. */
 void Option_Draw(void) {
@@ -1744,6 +2118,9 @@ void Option_Draw(void) {
             break;
     }
 
+#ifdef PORT_VITA
+    Option_VitaKeysLayout(flash);
+#endif
     /* the two-way picker's captions */
     if (gOption->picker == 4 || gOption->picker == 2) {
         baseY = 0;
@@ -1799,6 +2176,9 @@ void Option_Draw(void) {
             Flash_ClipSetFlags(flash, &ref, 2, 0);
         }
     }
+#ifdef PORT_VITA
+    Option_VitaTouchPlates(flash); /* (after the console's captions: in their place for "Touch Buttons") */
+#endif
 
     /* the volume window: ten numbered plates per volume */
     for (i = 0; i < 3; i++) {
@@ -2133,6 +2513,11 @@ void Option_UpdateReset(void) {
                 if (!(gSaveData->flags & 4)) {
                     gSaveData->flags |= 4;
                 }
+#ifdef PORT_VITA
+                for (i = 0; i < 4; i++) {
+                    Vita_TouchSetSpot(i, 0); /* L2, R2, L3, R3 back on the rear pad */
+                }
+#endif
                 for (i = 0; i < 2; i++) {
                     gSaveData->keyEdit[i][0] = 2;
                     gSaveData->keyEdit[i][1] = 1;
@@ -2142,6 +2527,10 @@ void Option_UpdateReset(void) {
                     gSaveData->keyEdit[i][5] = 5;
                     gSaveData->keyEdit[i][6] = 6;
                     gSaveData->keyEdit[i][7] = 7;
+#ifdef PORT_VITA
+                    Save_PortDefaultKeys(gSaveData->keyEdit[i]); /* the handheld's Normal */
+                    Save_PortDefaultKeys(gSaveData->key[i]);
+#endif
                 }
             }
             gOption->resetStep = 3;

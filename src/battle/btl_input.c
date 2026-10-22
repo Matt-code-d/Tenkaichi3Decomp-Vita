@@ -492,6 +492,20 @@ u32 BtlInput_GetKeyMask(BtlInputChr *chr, s32 action) {
     s32 padBit[SAVE_KEY_COUNT] = { PAD_CIRCLE, PAD_CROSS, PAD_SQUARE, PAD_TRIANGLE, PAD_L1, PAD_L2, PAD_R1, PAD_R2 };
     s32 i;
 
+#ifdef PORT_VITA
+    { /* the control type as the controller page shows it: Normal (the handheld's: Ki Charge on L) or the
+         custom set, read here rather than from key[], which the console copied only when the player row was left */
+        s32 tmp[SAVE_KEY_COUNT];
+        const s32 *key = Save_PortKeys(chr->player, tmp);
+
+        for (i = 0; i < SAVE_KEY_COUNT; i++) {
+            if (key[i] == action) {
+                return padBit[i];
+            }
+        }
+        return 0;
+    }
+#endif
     for (i = 0; i < SAVE_KEY_COUNT; i++) {
         if (gSaveData->key[chr->player][i] == action) {
             return padBit[i];

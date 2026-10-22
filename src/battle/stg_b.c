@@ -984,9 +984,21 @@ void ScrXfade_FreeBuffers(void) {
 }
 
 /* Reads the frame being shown back from the GS, upper and lower half. */
+#ifdef PORT_VITA
+/* (Vita) The cross-fade the renderer does itself: the GS's picture cannot be read back (the PS2 read the
+   shown frame into two buffers and uploaded them again every frame of the fade: 230,000 pixels a picture written
+   into GS memory for nothing, the picture being on the graphics chip, and the fade's draw then left out as a texture
+   from the depth buffer's page). A capture counts on; the fade's draw is a marker with its alpha and that count, and
+   the renderer copies the picture shown last when the count is new (vita_vgl.c xf_marker). */
+unsigned gVitaXfadeSerial;
+#endif
 void ScrXfade_Capture(void) {
     s32 fbp = 0xE00;
 
+#ifdef PORT_VITA
+    gVitaXfadeSerial++;
+    return;
+#endif
     if (!(gGfx.frame & 1)) {
         fbp = 0;
     }
@@ -1062,6 +1074,13 @@ void ScrXfade_Draw(s32 unused, s32 tbp, u8 alpha) {
     s32 bw;
     s32 w, h;
 
+#ifdef PORT_VITA
+    {
+        extern void Port_GsMarkerArg(int effect, unsigned arg);
+        Port_GsMarkerArg(0x50, (unsigned)alpha | gVitaXfadeSerial << 8);
+        return;
+    }
+#endif
     /* w and h as variables: `w * h / 64` keeps 0x700 in a register (hoisted by the second loop pass) */
     w = 0x200;
     h = 0xE0;

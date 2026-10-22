@@ -33,7 +33,15 @@ extern uint32_t gGsPageGen[512]; /* bumped whenever an upload writes into that 8
 extern unsigned gGsFrame;
 
 uint32_t Gs_PageHash(uint32_t page); /* content hash of an 8 KB page of GS memory */
+#ifdef PORT_VITA
+/* PS Vita: uploads are not written into GS memory until something reads them (gs_core.c). The content of a
+   rectangle of a buffer as a number, and a counter of every change (a key made at one count holds for it). */
+uint32_t Gs_RectId(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t x0, uint32_t y0, uint32_t w, uint32_t h);
+extern unsigned gGsEpoch;
+#endif
 uint32_t Gs_VramRead(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t x, uint32_t y);
+void Gs_VramReadRect(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t w, uint32_t h, uint32_t *out);
+int Gs_VramReadIdx8(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t w, uint32_t h, uint8_t *out, uint32_t stride);
 extern unsigned gGsFbUploads;
 void GsGpu_FbUpload(int second);
 int Gs_PsmBits(uint32_t psm);

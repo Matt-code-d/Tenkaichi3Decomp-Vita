@@ -125,7 +125,18 @@ void Adx_ResumeSeVoice(void) {
 }
 
 /* Starts file `id` on a player with the given volume and pan; a voice channel that is reserved is left alone. */
+#ifdef PORT_VITA
+extern void Vita_Log(const char *fmt, ...);
+static s32 sAdxPlayLog; /* the voice lines asked for, and those a busy line slot kept back */
+#endif
 void Adx_Play(s32 ch, s32 id, s32 vol, s32 pan) {
+#ifdef PORT_VITA
+    if ((ch == ADX_CH_VOICE0 || ch == ADX_CH_VOICE1) && sAdxPlayLog < 200) {
+        sAdxPlayLog++;
+        Vita_Log("adx: voice %d file %d volume %d%s\n", ch - ADX_CH_VOICE0, id, vol,
+                 BtlScript_IsSlotBusy(ch - ADX_CH_VOICE0, 0) || BtlScript_IsSlotBusy(ch - ADX_CH_VOICE0, 1) ? " (kept back: a line slot is busy)" : "");
+    }
+#endif
     switch (ch) {
     case ADX_CH_VOICE0:
         if (BtlScript_IsSlotBusy(0, 0)) {

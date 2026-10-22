@@ -100,6 +100,30 @@ extern volatile u32 *Port_DmaChcr(s32 channel);
 #define D_CTRL ((volatile u32 *)0x1000E000)
 #define D_STAT ((volatile u32 *)0x1000E010)
 #define D_PCR ((volatile u32 *)0x1000E020)
+#ifdef PORT_VITA
+/* PS Vita: a program cannot place memory at the PS2's register addresses; PORT_HW() (port_compat.h) leads to a
+   block of ordinary memory instead. */
+#undef VIF1_STAT
+#define VIF1_STAT ((volatile u32 *)PORT_HW(0x10003C00))
+#undef GIF_STAT
+#define GIF_STAT ((volatile u32 *)PORT_HW(0x10003020))
+#undef D1_QWC
+#define D1_QWC ((volatile u32 *)PORT_HW(0x10009020))
+#undef D1_TADR
+#define D1_TADR ((volatile u32 *)PORT_HW(0x10009030))
+#undef D2_MADR
+#define D2_MADR ((volatile u32 *)PORT_HW(0x1000A010))
+#undef D2_QWC
+#define D2_QWC ((volatile u32 *)PORT_HW(0x1000A020))
+#undef D2_TADR
+#define D2_TADR ((volatile u32 *)PORT_HW(0x1000A030))
+#undef D_CTRL
+#define D_CTRL ((volatile u32 *)PORT_HW(0x1000E000))
+#undef D_STAT
+#define D_STAT ((volatile u32 *)PORT_HW(0x1000E010))
+#undef D_PCR
+#define D_PCR ((volatile u32 *)PORT_HW(0x1000E020))
+#endif
 
 /* One quadword of GS packet data seen as a whole, as two doublewords or as four words. */
 typedef union GsQword {

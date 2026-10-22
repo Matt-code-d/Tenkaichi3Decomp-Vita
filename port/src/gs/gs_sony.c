@@ -68,7 +68,14 @@ int sceGsPutDrawEnv(uint64_t *giftag) {
 
 int sceGsSwapDBuff(void *p, int id) {
     DBuff *db = p;
+#ifdef PORT_VITA /* in its place among the lists the render thread still has to draw (gs_core.c) */
+    extern void Port_GsSwap(int fbp, uint32_t addr, uint32_t qwc);
+    uint64_t *giftag = (id & 1) ? db->giftag1 : db->giftag0;
+    Port_GsSwap((int)(((id & 1) ? db->draw1.frame.v : db->draw0.frame.v) & 0x1FF), (uint32_t)(uintptr_t)giftag, 1 + (uint32_t)(giftag[0] & 0x7FFF));
+    return 0;
+#else
     /* the buffer this frame is drawn into: what the renderer shows when the frame is finished */
     gGsMainFbp = (int)(((id & 1) ? db->draw1.frame.v : db->draw0.frame.v) & 0x1FF);
     return sceGsPutDrawEnv((id & 1) ? db->giftag1 : db->giftag0);
+#endif
 }

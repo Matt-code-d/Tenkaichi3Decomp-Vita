@@ -9,6 +9,12 @@
  * the movie file the game opened last (the path from plat_file.c): each sceMpegGetPicture decodes one picture and
  * rearranges it into the block order. The bytes the game feeds to sceMpegDemuxPss are ignored. Without a window a
  * movie ends at once, except when recorded input is played back (the movie has to take the same number of frames).
+ *
+ * PS Vita (PORT_VITA): one core decodes about a third of the pictures a second the
+ * film has, so the pictures are decoded ahead of time on the other cores (Mpeg2Player, plat_mpeg2.c) and the
+ * game's thread only collects the one whose turn it is. The picture then goes straight to the renderer
+ * (Vita_MovieFrame): the game's buffer is not filled, and the upload of that buffer into GS memory, which the
+ * game still sends every frame, is recognised by its address and not carried out (Vita_MovieDirect).
  */
 #include <stdint.h>
 #include <stdio.h>
@@ -32,7 +38,64 @@ static Mpeg2 *sMovie;
 static int sStarted, sEnd;
 static uint8_t sFrame[MOVIE_W * MOVIE_H * 4];
 
+#ifdef PORT_VITA
+typedef struct Mpeg2Player Mpeg2Player;
+extern Mpeg2Player *Mpeg2Player_Open(const char *path, int workers);
+extern int Mpeg2Player_Next(Mpeg2Player *p, const uint8_t **rgba, unsigned patience);
+extern int Mpeg2Player_Workers(const Mpeg2Player *p, int priority[2]);
+extern int Mpeg2Player_Width(const Mpeg2Player *p);
+extern int Mpeg2Player_Height(const Mpeg2Player *p);
+extern void Mpeg2Player_Stats(Mpeg2Player *p, unsigned stat[4], unsigned *decodeUs);
+extern void Mpeg2Player_Close(Mpeg2Player *p);
+extern int gVglSafe; /* vita_vgl.c; 64: the film as before (decoded on the game's thread, uploaded by the game) */
+extern void Vita_Log(const char *fmt, ...);
+
+static Mpeg2Player *sPlayer;
+static const uint8_t *sPicture;            /* the picture to show (the player's, or sFrame) */
+static int sFrameNew;                      /* it has not been taken by the renderer yet */
+static const uint8_t *sGameBuf, *sGameEnd; /* the game's picture buffer, while a player runs */
+
+const uint8_t *Vita_MovieFrame(void) { /* the decoded picture (512 x 448, R G B 255), once per picture */
+    if (!sFrameNew) {
+        return NULL;
+    }
+    sFrameNew = 0;
+    return sPicture;
+}
+
+/* 1: `p` is data of the film's picture on its way into GS memory (the renderer has the picture already). */
+int Vita_MovieDirect(const void *p) {
+    return sPlayer != NULL && (const uint8_t *)p >= sGameBuf && (const uint8_t *)p < sGameEnd;
+}
+
+int Vita_MoviePlaying(void) {
+    return sPlayer != NULL || sMovie != NULL;
+}
+
+/* For the log: 0 when no film is playing in the background. */
+int Vita_MovieStats(unsigned stat[4], unsigned *decodeUs) {
+    if (sPlayer == NULL) {
+        return 0;
+    }
+    Mpeg2Player_Stats(sPlayer, stat, decodeUs);
+    return 1;
+}
+#endif
+
 static void movie_close(void) {
+#ifdef PORT_VITA
+    if (sPlayer != NULL) {
+        unsigned st[4], us;
+        Mpeg2Player_Stats(sPlayer, st, &us);
+        Vita_Log("vita: film closed: %u pictures shown, %u decoded too late, %u left out, %u asked for early; %u ms per picture\n",
+                 st[0], st[1], st[2], st[3], us / 1000);
+        Mpeg2Player_Close(sPlayer);
+        sPlayer = NULL;
+    }
+    sPicture = NULL;
+    sFrameNew = 0;
+    sGameBuf = sGameEnd = NULL;
+#endif
     if (sMovie != NULL) {
         Mpeg2_Close(sMovie);
         sMovie = NULL;
@@ -48,6 +111,18 @@ static void movie_start(void) {
     if ((!GsGpu_Enabled() && getenv("BT3_PAD_PLAY") == NULL) || gPortMoviePath[0] == '\0' || getenv("BT3_NOMOVIE") != NULL) {
         return;
     }
+#ifdef PORT_VITA
+    if (!(gVglSafe & 64)) {
+        sPlayer = Mpeg2Player_Open(gPortMoviePath, 3);
+        if (sPlayer != NULL) {
+            int prio[2], n = Mpeg2Player_Workers(sPlayer, prio);
+            Vita_Log("vita: film %s: decoded on %d more threads (priority %d; the game's thread %d)\n", gPortMoviePath, n, prio[1], prio[0]);
+            sEnd = 0;
+            return;
+        }
+        Vita_Log("vita: film %s: no player; decoded on the game's thread\n", gPortMoviePath);
+    }
+#endif
     sMovie = Mpeg2_Open(gPortMoviePath);
     sEnd = sMovie == NULL;
 }
@@ -78,10 +153,39 @@ int sceMpegGetPicture(void *mp, void *rgb, int blocks) {
     if (!sStarted) {
         movie_start();
     }
+#ifdef PORT_VITA
+    if (sPlayer != NULL) {
+        const uint8_t *pic = NULL;
+        /* (the game's frame has time to spare: a picture a worker is just finishing is worth a few milliseconds) */
+        int r = Mpeg2Player_Next(sPlayer, &pic, 8000);
+
+        if (r < 0 || (r > 0 && (Mpeg2Player_Width(sPlayer) != MOVIE_W || Mpeg2Player_Height(sPlayer) != MOVIE_H))) {
+            sEnd = 1;
+            return -1;
+        }
+        if (r > 0) {
+            sPicture = pic;
+            sFrameNew = 1;
+        }
+        sGameBuf = out;
+        sGameEnd = out + (size_t)(blocks > 0 ? blocks : 0) * 0x400;
+        return 0;
+    }
+#endif
     if (sMovie == NULL || !Mpeg2_Next(sMovie, sFrame) || Mpeg2_Width(sMovie) != MOVIE_W || Mpeg2_Height(sMovie) != MOVIE_H) {
         sEnd = 1;
         return -1;
     }
+#ifdef PORT_VITA /* the renderer takes the picture from here (Vita_MovieFrame), not back out of GS memory */
+    {
+        extern int gVitaGsSkip;
+        if (gVitaGsSkip) {
+            return 0; /* stepped over (plat_mpeg2.c): the game's buffer keeps the last picture */
+        }
+        sPicture = sFrame;
+        sFrameNew = 1;
+    }
+#endif
     for (i = 0; i < cols; i++) {
         for (j = 0; j < rows && i * rows + j < blocks; j++) {
             uint8_t *b = out + (size_t)(i * rows + j) * 0x400;

@@ -625,7 +625,13 @@ void HudCombo_SetMessage(s32 side, s32 message) {
 }
 
 /* Starts the text line on a side: the name of entry `text` of the fighter's skill script. */
+#ifdef PORT_VITA
+extern void Vita_FilmTrigger(int side, int text); /* a test run's film from this moment (filmtrig=) */
+#endif
 void HudCombo_SetText(s32 side, s32 text) {
+#ifdef PORT_VITA
+    Vita_FilmTrigger(side, text);
+#endif
     gHudCombo->textState[side] = 0;
     gHudCombo->text[side] = text;
 }

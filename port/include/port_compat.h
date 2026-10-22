@@ -29,6 +29,14 @@ typedef float f32;
 #define ASM_STUB_BEGIN() extern int asm_stub_begin_
 #define ASM_STUB_END() extern int asm_stub_end_
 
+/* PS Vita: the PS2's hardware-register addresses (0x1000xxxx: timers, DMA, VIF, GIF; 0x1200xxxx: the GS) cannot be
+   mapped there, so the register macros of the game go through PORT_HW() to two blocks of ordinary memory
+   (port/vita/vita_mem.c). On PC the registers are plain memory at the PS2's own addresses (port/src/plat_mem.c). */
+#ifdef PORT_VITA
+extern unsigned char gPortHw[], gPortGsReg[];
+#define PORT_HW(a) ((a) >= 0x12000000u ? (unsigned)gPortGsReg + ((a) - 0x12000000u) : (unsigned)gPortHw + ((a) - 0x10000000u))
+#endif
+
 /* C library calls of the game that must not go to the host's versions (see port/src/plat_mem.c). */
 #define malloc Port_Malloc
 

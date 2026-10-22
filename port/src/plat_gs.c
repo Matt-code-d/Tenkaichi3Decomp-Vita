@@ -9,7 +9,12 @@
  */
 #include <stdint.h>
 
+#ifdef PORT_VITA /* the register block of port/vita/vita_mem.c (see PORT_HW in port_compat.h) */
+extern unsigned char gPortHw[];
+#define REG(a) ((volatile uint32_t *)(gPortHw + ((a) - 0x10000000u)))
+#else
 #define REG(a) ((volatile uint32_t *)(uintptr_t)(a))
+#endif
 
 extern void Port_GsVif1Chain(uint32_t tadr, int tte);
 extern void Port_GsGifChannel(uint32_t addr, uint32_t qwc, int chain);

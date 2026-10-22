@@ -66,10 +66,18 @@ static void vblank_wait(void) {
 
 void Port_VBlank(void) {
     /* BT3_PACED=1: real-time pacing without a window too (sound tests) */
+#ifndef PORT_VITA /* (the Vita keeps its own time: Vita_VBlank below) */
     if ((GsGpu_Enabled() || getenv("BT3_PACED") != NULL) && getenv("BT3_UNCAPPED") == NULL) {
         vblank_wait();
     }
+#endif
     gPortVBlanks++;
+#ifdef PORT_VITA
+    {
+        extern void Vita_VBlank(unsigned vblanks); /* port/vita/vita_main.c: status screen, timing */
+        Vita_VBlank(gPortVBlanks);
+    }
+#endif
     Port_Trace(gPortVBlanks);
     if (sVsyncHandler != NULL) {
         sVsyncHandler(0);
@@ -153,6 +161,12 @@ int sceVibSetActParam() { return 0; }
 static int sAspectMilli = -1;
 extern int Port_Setting(const char *name, int def); /* plat_settings.c */
 int Port_AspectMilli(void) {
+#ifdef PORT_VITA /* the Vita's own screen, 960 x 544 (wide=0 in bt3.txt: 4:3) */
+    if (sAspectMilli < 0) {
+        extern int gVitaWide;
+        sAspectMilli = gVitaWide ? 1765 : 1333;
+    }
+#endif
     if (sAspectMilli < 0) {
         int a = 0, b = 0, w = 0, h = 0;
         sAspectMilli = Port_Setting("aspect_milli", 1333); /* the saved choice; the variables below win */

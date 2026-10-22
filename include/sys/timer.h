@@ -5,9 +5,17 @@
 
 /* EE hardware timers 0 and 1 used as a stopwatch, src/sys/timer.c = 0x11F190..0x11F548. */
 
+#ifdef PORT_VITA
+/* PS Vita: a program cannot place memory at the PS2's register addresses; PORT_HW() (port_compat.h) leads to a
+   block of ordinary memory instead. */
+#define TIMER_COUNT(ch) (*(volatile u32 *)(PORT_HW(0x10000000) + (ch) * 0x800))
+#define TIMER_MODE(ch) (*(volatile u32 *)(PORT_HW(0x10000010) + (ch) * 0x800))
+#define TIMER_COMP(ch) (*(volatile u32 *)(PORT_HW(0x10000020) + (ch) * 0x800))
+#else
 #define TIMER_COUNT(ch) (*(volatile u32 *)(0x10000000 + (ch) * 0x800)) /* Tn_COUNT */
 #define TIMER_MODE(ch) (*(volatile u32 *)(0x10000010 + (ch) * 0x800))  /* Tn_MODE */
 #define TIMER_COMP(ch) (*(volatile u32 *)(0x10000020 + (ch) * 0x800))  /* Tn_COMP */
+#endif
 
 /* Tn_MODE bits */
 #define TIMER_MODE_CLK_HBLANK 0x003 /* count horizontal blanks */

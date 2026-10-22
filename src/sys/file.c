@@ -284,6 +284,15 @@ void *File_LoadSyncEx(s32 id, char *name, void *buf, s32 unused) {
         ADXM_ExecMain();
     } while (ADXF_GetStat(adxf) != ADXF_STAT_READEND);
     ADXF_Close(adxf);
+#ifdef PORT_VITA
+    { /* bt3.txt dump=1 (tests): a copy of each file read this way, ux0:data/bt3/dump/<id>.bin */
+        extern int gVitaDump;
+        extern void Vita_DumpFile(s32 id, void *data, s32 size);
+        if (gVitaDump) {
+            Vita_DumpFile(id, dst, sectors * FILE_SECTOR_SIZE);
+        }
+    }
+#endif
     buf = dst;
     return buf;
 }

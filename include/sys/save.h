@@ -139,5 +139,15 @@ void Save_Init(void);
 void Save_AddItem(s32 idx);
 void Save_AddMoney(s32 amount);
 void Save_ResetRules(void);
+#ifdef PORT_VITA
+/* The Normal control type of the handheld: Ki Charge on L (the console's L1) and Blaster Wave on L2
+   (the rear touch pad); the console's own is the other way round. key[i] = the action of button i (circle, cross,
+   square, triangle, L1, L2, R1, R2). */
+void Save_PortDefaultKeys(s32 *key);
+/* 1 when key[] is the console's Normal (what a save made by an early version of this port holds as its custom set) */
+s32 Save_PortKeysConsoleDefault(const s32 *key);
+/* the set the battle uses for controller `pad`: Custom when that controller's custom bit is on, else Normal */
+const s32 *Save_PortKeys(s32 pad, s32 *tmp);
+#endif
 
 #endif

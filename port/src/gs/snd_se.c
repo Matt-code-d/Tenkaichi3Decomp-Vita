@@ -168,54 +168,98 @@ static void decode_block(Voice *v) {
     }
 }
 
+/* One voice's samples added into acc, in whole numbers: the position as 16.16 within the block, the
+   gains as 2.14. The Vita's sound thread spent about 80 ms a second here with the position and the step in double
+   precision, on the drawing thread's core. A voice being stopped (its 8 ms fade) takes the float way. */
+static int32_t gain_q14(float g) {
+    float q = g * 16384.0f;
+    if (q < 0.0f) { q = 0.0f; }
+    if (q > 65535.0f) { q = 65535.0f; } /* (a sample times this stays within 31 bits) */
+    return (int32_t)(q + 0.5f);
+}
+static void mix_voice_int(Voice *v, int32_t *acc, int n) {
+    uint32_t fp = (uint32_t)(v->frac * 65536.0), st = (uint32_t)(v->step * 65536.0 + 0.5);
+    int32_t gl = gain_q14(v->gl * v->fade), gr = gain_q14(v->gr * v->fade);
+    int i;
+    for (i = 0; i < n; i++) {
+        int32_t a, b, smp;
+        uint32_t ip;
+        while (fp >= ((uint32_t)v->have << 16)) {
+            fp -= (uint32_t)v->have << 16;
+            decode_block(v);
+            if (v->ended) {
+                break;
+            }
+        }
+        if (v->ended) {
+            v->on = 0;
+            break;
+        }
+        ip = fp >> 16;
+        a = ip == 0 ? v->prev : v->buf[ip - 1];
+        b = v->buf[ip];
+        smp = a + (((b - a) * (int32_t)((fp & 0xFFFF) >> 1)) >> 15);
+        acc[i * 2] += (smp * gl) >> 14;
+        acc[i * 2 + 1] += (smp * gr) >> 14;
+        fp += st;
+    }
+    v->frac = (double)fp / 65536.0;
+}
+static void mix_voice_float(Voice *v, int32_t *acc, int n) { /* (a voice fading out after a stop) */
+    int i;
+    for (i = 0; i < n; i++) {
+        float s, a, b;
+        int ip;
+        while (v->frac >= (double)v->have) {
+            v->frac -= (double)v->have;
+            decode_block(v);
+            if (v->ended) {
+                break;
+            }
+        }
+        if (v->ended) {
+            v->on = 0;
+            break;
+        }
+        ip = (int)v->frac;
+        a = (float)(ip == 0 ? v->prev : v->buf[ip - 1]);
+        b = (float)v->buf[ip];
+        s = (a + (b - a) * (float)(v->frac - (double)ip)) * v->fade;
+        acc[i * 2] += (int32_t)(s * v->gl);
+        acc[i * 2 + 1] += (int32_t)(s * v->gr);
+        v->frac += v->step;
+        v->fade -= 1.0f / (0.008f * OUT_RATE); /* 8 ms */
+        if (v->fade <= 0.0f) {
+            v->on = 0;
+            break;
+        }
+    }
+}
+
 /* SDL's audio thread wants more (the stream is locked while this runs). */
 static void SDLCALL mix(void *user, SDL_AudioStream *stream, int additional, int total) {
     int16_t out[512 * 2];
-    float acc[512 * 2];
+    int32_t acc[512 * 2];
     int frames = additional / 4, n, i, k;
 
     (void)user; (void)total;
     while (frames > 0) {
         n = frames > 512 ? 512 : frames;
-        memset(acc, 0, sizeof(float) * (size_t)n * 2);
+        memset(acc, 0, sizeof(int32_t) * (size_t)n * 2);
         for (k = 0; k < VOICES; k++) {
             Voice *v = &sVoices[k];
             if (!v->on || sBanks[v->bank].paused) {
                 continue;
             }
-            for (i = 0; i < n; i++) {
-                float s, a, b;
-                int ip;
-                while (v->frac >= (double)v->have) {
-                    v->frac -= (double)v->have;
-                    decode_block(v);
-                    if (v->ended) {
-                        break;
-                    }
-                }
-                if (v->ended) {
-                    v->on = 0;
-                    break;
-                }
-                ip = (int)v->frac;
-                a = (float)(ip == 0 ? v->prev : v->buf[ip - 1]);
-                b = (float)v->buf[ip];
-                s = (a + (b - a) * (float)(v->frac - (double)ip)) * v->fade;
-                acc[i * 2] += s * v->gl;
-                acc[i * 2 + 1] += s * v->gr;
-                v->frac += v->step;
-                if (v->stopping) {
-                    v->fade -= 1.0f / (0.008f * OUT_RATE); /* 8 ms */
-                    if (v->fade <= 0.0f) {
-                        v->on = 0;
-                        break;
-                    }
-                }
+            if (v->stopping) {
+                mix_voice_float(v, acc, n);
+            } else {
+                mix_voice_int(v, acc, n);
             }
         }
         for (i = 0; i < n * 2; i++) {
-            float s = acc[i];
-            out[i] = (int16_t)(s > 32767.0f ? 32767.0f : s < -32768.0f ? -32768.0f : s);
+            int32_t s = acc[i];
+            out[i] = (int16_t)(s > 32767 ? 32767 : s < -32768 ? -32768 : s);
         }
         SDL_PutAudioStreamData(stream, out, n * 4);
         frames -= n;
@@ -347,6 +391,10 @@ int sceSifCallRpc(void *client, int fno, int mode, void *send, int sendSize, voi
     (void)client; (void)mode; (void)sendSize; (void)cb; (void)arg;
     if (recv != NULL && recvSize >= 4) {
         memset(recv, 0, 4); /* the result word */
+    }
+    if (fno == 0x9 || fno == 0xF || fno == 0x8 || fno == 0xB || fno == 0xC || fno == 0xE || fno == 0x1) {
+        return 0; /* TICK (every frame), FIGHTERS and the unused ones change nothing here: not worth
+                     waiting for the sound thread's lock (it holds it while it mixes) */
     }
     if (sStream != NULL) { SDL_LockAudioStream(sStream); }
     switch (fno) {

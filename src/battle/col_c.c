@@ -356,6 +356,13 @@ s32 Font_MeasureWidthEx(void *str, s32 kind, f32 scale) {
     u16 ch;
     FontGlyph *glyph;
 
+#ifdef PORT_VITA
+    {
+        extern void *Vita_TextFix(void *str, s32 kind);
+        str = Vita_TextFix(str, kind);
+    }
+#endif
+
     while (1) {
         ch = Font_ReadChar(kind, str);
         str = (u8 *)str + Font_CharSize(kind);
@@ -408,6 +415,13 @@ f32 Font_FitScale(u16 *str, s32 width) {
 s32 Font_CountLinesEx(void *str, s32 kind) {
     s32 lines = 1;
     u16 ch;
+
+#ifdef PORT_VITA
+    {
+        extern void *Vita_TextFix(void *str, s32 kind);
+        str = Vita_TextFix(str, kind);
+    }
+#endif
 
     for (;;) {
         ch = Font_ReadChar(kind, str);
@@ -1041,8 +1055,17 @@ void Font_SetCmdCount(s32 count) {
 }
 
 /* Queues a command with a snapshot of the current style. */
+#ifdef PORT_VITA
+extern void *Vita_TextFix(void *str, s32 kind); /* (port/vita/vita_text.c: the PS2's name out of the menus' text) */
+#endif
 FontCmd *Font_NewCmd(s32 arg, s32 digits, s32 x, s32 y, s32 homeX, s32 kind) {
     FontCmd *cmd = Font_AllocCmd();
+
+#ifdef PORT_VITA
+    if (kind == FONT_CMD_STR16 || kind == FONT_CMD_STR8) {
+        arg = (s32)Vita_TextFix((void *)arg, kind);
+    }
+#endif
 
     cmd->arg = arg;
     cmd->x = x;

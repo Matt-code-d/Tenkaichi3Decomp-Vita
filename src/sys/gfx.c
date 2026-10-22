@@ -81,12 +81,23 @@ extern void PadWatch_Draw(void);
 extern void Vu0_CheckState(void);
 
 /* GS privileged (display) registers. */
+#ifdef PORT_VITA
+/* PS Vita: a program cannot place memory at the PS2's register addresses; PORT_HW() (port_compat.h) leads to a
+   block of ordinary memory instead. */
+#define GS_PMODE ((volatile u64 *)PORT_HW(0x12000000))
+#define GS_DISPFB1 ((volatile u64 *)PORT_HW(0x12000070))
+#define GS_DISPLAY1 ((volatile u64 *)PORT_HW(0x12000080))
+#define GS_DISPFB2 ((volatile u64 *)PORT_HW(0x12000090))
+#define GS_DISPLAY2 ((volatile u64 *)PORT_HW(0x120000A0))
+#define GS_EXTWRITE ((volatile u64 *)PORT_HW(0x120000D0))
+#else
 #define GS_PMODE ((volatile u64 *)0x12000000)
 #define GS_DISPFB1 ((volatile u64 *)0x12000070)
 #define GS_DISPLAY1 ((volatile u64 *)0x12000080)
 #define GS_DISPFB2 ((volatile u64 *)0x12000090)
 #define GS_DISPLAY2 ((volatile u64 *)0x120000A0)
 #define GS_EXTWRITE ((volatile u64 *)0x120000D0)
+#endif
 
 /* Switches the GS to interlaced NTSC field mode and builds the 512x448 double buffer in gGfx. */
 void Gfx_InitDrawEnv(void) {

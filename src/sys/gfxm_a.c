@@ -607,11 +607,21 @@ void StgPanBlur_RestoreEnv(void) {
    coordinates go through `s64` temporaries (so that the `|` with the V half is not narrowed to 32 bits and they
    step as 64-bit values), and the first corner's X comes from `i`, not from `x` (so the loop cannot be reversed
    before the second loop pass, which puts the counter's initial value behind that corner's). */
+#ifdef PORT_VITA
+extern void Port_GsMarkerArg(s32 effect, u32 arg);
+extern void Port_GsMarker(s32 effect);
+#endif
 void GfxPost_DrawGlow(s32 passes, u32 color, u32 glow) {
     u64 *p;
     s32 i;
     s32 x;
 
+#ifdef PORT_VITA
+    /* (Vita) the glow drawn natively (port/vita/vita_vgl.c, glow_exec): its passes below are dropped up to the end
+       marker. The chain of work pages costs the Vita's chip a scene per pass (about thirty a picture). */
+    Port_GsMarkerArg(0x40, color);
+    Port_GsMarkerArg(0x41, glow);
+#endif
     passes += passes & 1;
     Gfx_AddDefaultEnv();
     p = Dma_BeginDirect();
@@ -1028,6 +1038,9 @@ void GfxPost_DrawGlow(s32 passes, u32 color, u32 glow) {
     p[1] = GS_CLAMP_1;
     p += 2;
     Dma_EndDirect(p);
+#ifdef PORT_VITA
+    Port_GsMarker(0x42);
+#endif
 }
 
 /* Draws a 16-bit texture over the screen, one line up, with the given blend. */
@@ -1696,6 +1709,18 @@ void StgDepthTint_Draw(void) {
         }
     }
     tint = &gStgDepthTint[medium];
+#ifdef PORT_VITA
+    {   /* the film's notes: the medium, and the camera's height against the water's */
+        extern void Vita_FilmTintNote(int medium, int enabled, int additive, int camY16, int waterY16);
+        f32 lv;
+        if (!Battle_IsSplitScreen() && BtlStage_GetWaterLevel(&lv)) {
+            Mtx_InverseRT(&m, &view->world2view2);
+            Vita_FilmTintNote(medium, tint->enabled, tint->additive, (s32)(m.m[3][1] * 16.0f), (s32)(lv * 16.0f));
+        } else {
+            Vita_FilmTintNote(medium, tint->enabled, tint->additive, 0, -1);
+        }
+    }
+#endif
     if (tint->enabled != 0) {
         Gfx_AddDefaultEnv();
         Dma_AddData(tint->tex.upload, 0x10);

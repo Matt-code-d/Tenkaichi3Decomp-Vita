@@ -183,16 +183,81 @@ static inline void EftSurf_QueueTri(EftScrPos *scr0, EftScrPos *scr1, EftScrPos 
     if (fog[0].w <= 0.01f && fog[1].w <= 0.01f && fog[2].w <= 0.01f) {
         count = 1;
     }
+#ifdef PORT_VITA
+    __builtin_memcpy(&col[0], col0, 16); /* (the library's copies, in line) */
+    __builtin_memcpy(&col[1], col1, 16);
+    __builtin_memcpy(&col[2], col2, 16);
+    __builtin_memcpy(&col[3], col0, 16);
+    __builtin_memcpy(&col[4], col1, 16);
+    __builtin_memcpy(&col[5], col2, 16);
+#else
     Vec4_Copy(&col[0], col0);
     Vec4_Copy(&col[1], col1);
     Vec4_Copy(&col[2], col2);
     Vec4_Copy(&col[3], col0);
     Vec4_Copy(&col[4], col1);
     Vec4_Copy(&col[5], col2);
+#endif
     col[3].w *= fog[0].w;
     col[4].w *= fog[1].w;
     col[5].w *= fog[2].w;
     layer = 0;
+#ifdef PORT_VITA
+    {   /* the corners' red, green and blue as bytes once: both packets have them (the second one differs in
+           its alphas only); the same conversions as EFT_SURF_FILL_PKT's */
+        u8 cr[3], cg[3], cb[3];
+        s32 k;
+        for (k = 0; k < 3; k++) {
+            cr[k] = col[k].x;
+            cg[k] = col[k].y;
+            cb[k] = col[k].z;
+        }
+        for (i = 0; i < count; i++) {
+            Vec4 *c = &col[i * 3];
+            u64 prim;
+
+            if (count == 1 && StgTint_IsOn(0)) {
+                continue;
+            }
+            pkt = (EftTriPkt *)gOtCur;
+            gOtCur = (u32 *)(pkt + 1);
+            prim = 0x1B;
+            ((EftPrim *)&prim)->abe = abe;
+            pkt->prim = prim;
+            pkt->tag = 0x20000007;
+            pkt->vif0 = 0x10000000;
+            pkt->vif1 = 0x50000007;
+            pkt->giftag[0] = 0xC400000000008001;
+            pkt->giftag[1] = 0xF42142142160;
+            pkt->next = 0;
+            pkt->nop = 0;
+            for (k = 0; k < 3; k++) {
+                pkt->v[k].r = cr[k];
+                pkt->v[k].g = cg[k];
+                pkt->v[k].b = cb[k];
+                pkt->v[k].a = c[k].w;
+            }
+            pkt->v[0].q = ((f32 *)st0)[2];
+            pkt->v[1].q = ((f32 *)st1)[2];
+            l = layer;
+            pkt->v[2].q = st2->z;
+            if (!(layer < 2)) {
+                l = layer - 2;
+            }
+            pkt->tex0 = tex[i];
+            EFT_SURF_FILL_PKT2(pkt, (s32 *)scr0, (s32 *)scr1, (s32 *)scr2, (f32 *)st0, (f32 *)st1, (f32 *)st2);
+            {
+                extern int gVitaSeaMark;
+                if (gVitaSeaMark) {
+                    pkt->vif0 = 0x5EA00000u | (u32)l;
+                }
+            }
+            EFT_SURF_QUEUE(pkt, z, l, entry);
+            layer++;
+        }
+        return;
+    }
+#endif
     for (i = 0; i < count; i++) {
         Vec4 *c = &col[i * 3];
         u64 prim;
@@ -210,10 +275,44 @@ static inline void EftSurf_QueueTri(EftScrPos *scr0, EftScrPos *scr1, EftScrPos 
         }
         pkt->tex0 = tex[i];
         EFT_SURF_FILL_PKT2(pkt, (s32 *)scr0, (s32 *)scr1, (s32 *)scr2, (f32 *)st0, (f32 *)st1, (f32 *)st2);
+#ifdef PORT_VITA
+        {   /* a triangle of a flat reflecting surface (the sea): marked in the header's VIF word, which is
+               not sent, for Ot_Send (src/sys/gfx_ot.c) */
+            extern int gVitaSeaMark;
+            if (gVitaSeaMark) {
+                pkt->vif0 = 0x5EA00000u | (u32)l;
+            }
+        }
+#endif
         EFT_SURF_QUEUE(pkt, z, l, entry);
         layer++;
     }
 }
+
+#ifdef PORT_VITA
+/* (port, Vita) 1 when the three corners all lie clearly inside the five clip planes (eft_c.c EftSurf_PortInside):
+   the five ClipPoly_ClipPlane calls would hand the triangle back unchanged. */
+static s32 EftSurfD_PortInside(EftSurfVtxD *tri, Vec4 *pl) {
+    s32 p;
+    s32 k;
+    extern int gVitaSurfCull;
+
+    if (!gVitaSurfCull) {
+        return 0;
+    }
+    for (p = 0; p < 5; p++, pl++) {
+        for (k = 0; k < 3; k++) {
+            f32 a = pl->x * tri[k].pos.x, b = pl->y * tri[k].pos.y, c = pl->z * tri[k].pos.z;
+            f32 d = a + b + c + pl->w;
+            f32 m = (a < 0.0f ? -a : a) + (b < 0.0f ? -b : b) + (c < 0.0f ? -c : c) + (pl->w < 0.0f ? -pl->w : pl->w);
+            if (!(d > 1e-4f * m)) {
+                return 0;
+            }
+        }
+    }
+    return 1;
+}
+#endif
 
 /* Clips a triangle against the five planes of the surface and queues the resulting polygon as a fan
    (vertex 0, k - 1, k), each fan triangle through EftSurf_QueueTri. */
@@ -231,18 +330,46 @@ void EftSurf_DrawPolyOtClipped(EftSurfVtxD *poly, s32 unused, u64 *tex, Vec4 *fo
     Vec4 *plane = gEftSurf->clipPlanes;
     s32 count = 3;
     s32 k;
+#ifdef PORT_VITA
+    extern int gVitaSurfMeas;
+    extern unsigned long long gVitaSurfCyc[8];
+    extern unsigned Vita_SurfCyc(void);
+    unsigned c0 = gVitaSurfMeas ? Vita_SurfCyc() : 0, c1;
+#endif
 
+#ifdef PORT_VITA
+    if (!EftSurfD_PortInside(poly, plane))
+#endif
     for (k = 4; k >= 0; k--) {
         count = ClipPoly_ClipPlane(poly, plane, count);
         plane++;
     }
+#ifdef PORT_VITA
+    if (gVitaSurfMeas) {
+        c1 = Vita_SurfCyc();
+        gVitaSurfCyc[2] += c1 - c0;
+        c0 = c1;
+    }
+#endif
     if (count != 0) {
         ClipPoly_ProjectCur(scr, st, poly, count);
+#ifdef PORT_VITA
+        if (gVitaSurfMeas) {
+            c1 = Vita_SurfCyc();
+            gVitaSurfCyc[3] += c1 - c0;
+            c0 = c1;
+        }
+#endif
         for (k = 2; k < count; k++) {
             EftSurf_QueueTri((EftScrPos *)scr[0], (EftScrPos *)scr[k - 1], (EftScrPos *)scr[k], &poly[0].col,
                              &poly[k - 1].col, &poly[k].col, (Vec4 *)st[0], (Vec4 *)st[k - 1], (Vec4 *)st[k], unused,
                              (scr[0][2] >> 8) - zBias, tex, fog, 2);
         }
+#ifdef PORT_VITA
+        if (gVitaSurfMeas) {
+            gVitaSurfCyc[4] += Vita_SurfCyc() - c0;
+        }
+#endif
     }
 }
 

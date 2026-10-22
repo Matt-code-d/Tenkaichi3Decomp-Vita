@@ -15,6 +15,10 @@
  *   Mpeg2_Width / Mpeg2_Height       valid after the first Mpeg2_Next
  *   Mpeg2_Close
  *
+ * All pictures being intra pictures, any number of them can be decoded at the same time. Where one processor
+ * core is too slow for 30 pictures a second (the PS Vita) the player further down does that: Mpeg2Player_*,
+ * built with MPEG2_PLAYER (and tested on a PC against the plain decoder: see mpeg2_player_test at the end).
+ *
  * Integer arithmetic only (this file is built with the game's software float like the rest of port/src).
  * Test: gcc -O2 -DMPEG2_TEST port/src/plat_mpeg2.c -o mpeg2test && ./mpeg2test movie.PSS out.yuv [frames]
  *       writes planar 4:2:0 pictures, to be compared with `ffmpeg -i movie.PSS -f rawvideo -pix_fmt yuv420p`.
@@ -25,15 +29,19 @@
 #include <string.h>
 
 typedef struct Mpeg2 {
-    FILE *fp;
+    intptr_t file;  /* 0: none (a context that only decodes units it is given) */
+    /* the file is read in large pieces: one read call per packet costs more than decoding it on a console */
+    uint8_t *in;
+    size_t inPos, inLen;
+    int inEnd;
     /* the video elementary stream, as far as it has been taken out of the file */
     uint8_t *es;
     size_t esSize, esCap;
-    uint8_t pack[65536 + 16];
     int eof;
+    int headersOnly; /* decode_unit: follow the headers, leave the slices alone */
     /* bit reader over the unit being decoded */
     const uint8_t *p, *end;
-    uint64_t bits;
+    uint32_t bits; /* the next bits of the stream at the top: at least 25 after refill() */
     int nbits;
     /* sequence */
     int width, height, mbw, mbh;
@@ -95,6 +103,8 @@ static const Code kB15[] = {
 
 typedef struct Vlc { uint8_t run, level, len; } Vlc;
 static Vlc sVlc[2][65536];
+static Vlc sVlcShort[2][1024]; /* by the first 10 bits, for the codes that are no longer (len 0: a longer one): nearly
+                                  all codes met, in a table small enough to stay in the processor's cache */
 static int sVlcReady;
 
 static void vlc_add(Vlc *t, const Code *c) {
@@ -129,26 +139,43 @@ static void vlc_init(void) {
     for (k = 0; k < sizeof(kB15) / sizeof(kB15[0]); k++) {
         vlc_add(sVlc[1], &kB15[k]);
     }
+    for (i = 0; i < 2; i++) {
+        for (k = 0; k < 1024; k++) {
+            sVlcShort[i][k] = sVlc[i][k << 6];
+            if (sVlcShort[i][k].len > 10) {
+                sVlcShort[i][k].len = 0;
+            }
+        }
+    }
     sVlcReady = 1;
 }
 
 /* ---- bits ---- */
-static void refill(Mpeg2 *m) {
-    while (m->nbits <= 56) {
-        m->bits |= (uint64_t)(m->p < m->end ? *m->p : 0) << (56 - m->nbits);
+/* (a 32-bit window: 64-bit shifts by a variable count are library calls on a 32-bit processor) */
+static inline void refill(Mpeg2 *m) {
+    while (m->nbits <= 24) {
+        m->bits |= (uint32_t)(m->p < m->end ? *m->p : 0) << (24 - m->nbits);
         m->p++;
         m->nbits += 8;
     }
 }
 
-static uint32_t peek(Mpeg2 *m, int n) {
+static inline uint32_t peek(Mpeg2 *m, int n) { /* 1 <= n <= 24 */
     if (m->nbits < n) {
         refill(m);
     }
-    return (uint32_t)(m->bits >> (64 - n));
+    return m->bits >> (32 - n);
 }
 
-static void skip(Mpeg2 *m, int n) {
+static inline void skip(Mpeg2 *m, int n) {
+    while (n > 24) {
+        if (m->nbits < 16) {
+            refill(m);
+        }
+        m->bits <<= 16;
+        m->nbits -= 16;
+        n -= 16;
+    }
     if (m->nbits < n) {
         refill(m);
     }
@@ -253,8 +280,9 @@ static int dc_size(Mpeg2 *m, int chroma) {
 static int block(Mpeg2 *m, int chroma, int *dcPred, int qscale, uint8_t *dst, int stride) {
     int32_t c[64];
     const uint8_t *scan = m->altScan ? kAlternate : kZigzag;
-    const Vlc *table = sVlc[m->intraVlc];
+    const Vlc *table = sVlc[m->intraVlc], *shortTable = sVlcShort[m->intraVlc];
     int size = dc_size(m, chroma), diff = 0, i = 0, sum, x, y;
+    unsigned rows = 1; /* the rows of the block that hold a coefficient (bit y): the others stay zero and need no work */
 
     memset(c, 0, sizeof(c));
     if (size != 0) {
@@ -267,11 +295,15 @@ static int block(Mpeg2 *m, int chroma, int *dcPred, int qscale, uint8_t *dst, in
     c[0] = *dcPred * (8 >> m->dcPrecision);
     sum = c[0];
     for (;;) {
-        const Vlc *e = &table[peek(m, 16)];
+        uint32_t code = peek(m, 16);
+        const Vlc *e = &shortTable[code >> 6];
         int run, level, sign, pos, v;
 
         if (e->len == 0) {
-            return 0; /* not a code: damaged data */
+            e = &table[code];
+            if (e->len == 0) {
+                return 0; /* not a code: damaged data */
+            }
         }
         skip(m, e->len);
         if (e->run == 64) {
@@ -303,13 +335,26 @@ static int block(Mpeg2 *m, int chroma, int *dcPred, int qscale, uint8_t *dst, in
         }
         c[pos] = sign ? -v : v;
         sum += c[pos];
+        rows |= 1u << (pos >> 3);
     }
     if (c[0] > 2047) { c[0] = 2047; } /* (cannot happen for valid data) */
     if (!(sum & 1)) { /* mismatch control */
         c[63] ^= 1;
+        rows |= 0x80;
+    }
+    if (i == 0 && (sum & 1)) { /* only the DC coefficient: one value for the whole block (what the transform gives) */
+        int v = ((c[0] << 3) + 32) >> 6;
+        uint32_t w = (uint32_t)(v < 0 ? 0 : v > 255 ? 255 : v) * 0x01010101u;
+        for (y = 0; y < 8; y++) {
+            memcpy(dst + y * stride, &w, 4);
+            memcpy(dst + y * stride + 4, &w, 4);
+        }
+        return 1;
     }
     for (y = 0; y < 8; y++) {
-        idct_row(&c[y * 8]);
+        if (rows & (1u << y)) {
+            idct_row(&c[y * 8]);
+        }
     }
     for (x = 0; x < 8; x++) {
         idct_col(&c[x]);
@@ -469,62 +514,120 @@ static void decode_unit(Mpeg2 *m, const uint8_t *p, const uint8_t *end) {
             skip(m, 10); /* temporal_reference */
             m->pictureType = (int)get(m, 3);
         } else if (code >= 0x01 && code <= 0xAF && m->y != NULL && m->pictureType == 1 && m->pictureStructure == 3) {
-            slice(m, code - 1);
-            m->havePicture = 1;
+            if (!m->headersOnly) {
+                slice(m, code - 1);
+                m->havePicture = 1;
+            }
         }
         p = next;
     }
 }
 
+/* ---- the file ---- */
+#ifdef PORT_VITA
+#include <psp2/io/fcntl.h>
+#include <psp2/kernel/processmgr.h>
+#include <psp2/kernel/threadmgr.h>
+#include <psp2/kernel/cpu.h>
+static intptr_t file_open(const char *path) {
+    SceUID fd = sceIoOpen(path, SCE_O_RDONLY, 0);
+    return fd >= 0 ? (intptr_t)fd + 1 : 0;
+}
+static size_t file_read(intptr_t f, void *to, size_t n) {
+    int got = sceIoRead((SceUID)(f - 1), to, (SceSize)n);
+    return got > 0 ? (size_t)got : 0;
+}
+static void file_close(intptr_t f) {
+    sceIoClose((SceUID)(f - 1));
+}
+#else
+static intptr_t file_open(const char *path) {
+    return (intptr_t)fopen(path, "rb");
+}
+static size_t file_read(intptr_t f, void *to, size_t n) {
+    return fread(to, 1, n, (FILE *)f);
+}
+static void file_close(intptr_t f) {
+    fclose((FILE *)f);
+}
+#endif
+
+#define IN_SIZE (96 * 1024) /* one read; more than the largest packet (65536 + 6 bytes) */
+
+/* Makes n bytes available at m->in + m->inPos. 0: the file has fewer left. */
+static int in_need(Mpeg2 *m, size_t n) {
+    while (m->inLen - m->inPos < n) {
+        size_t have = m->inLen - m->inPos, got;
+
+        if (m->inEnd) {
+            return 0;
+        }
+        memmove(m->in, m->in + m->inPos, have);
+        m->inPos = 0;
+        m->inLen = have;
+        got = file_read(m->file, m->in + have, IN_SIZE - have);
+        if (got == 0) {
+            m->inEnd = 1;
+            return 0;
+        }
+        m->inLen += got;
+    }
+    return 1;
+}
+
 /* ---- the program stream: pack headers, and packets of which the video ones carry the elementary stream ---- */
 static int more(Mpeg2 *m) {
-    uint8_t h[14];
-
     while (!m->eof) {
-        if (fread(h, 1, 4, m->fp) != 4) {
+        const uint8_t *h;
+        size_t len, skipBytes;
+
+        if (!in_need(m, 4)) {
             break;
         }
-        while (!(h[0] == 0 && h[1] == 0 && h[2] == 1)) { /* resynchronise */
-            int c = fgetc(m->fp);
-            if (c == EOF) {
-                m->eof = 1;
-                return 0;
-            }
-            h[0] = h[1]; h[1] = h[2]; h[2] = h[3]; h[3] = (uint8_t)c;
+        h = m->in + m->inPos;
+        if (!(h[0] == 0 && h[1] == 0 && h[2] == 1)) { /* resynchronise */
+            m->inPos++;
+            continue;
         }
         if (h[3] == 0xB9) { /* program end */
             break;
         }
         if (h[3] == 0xBA) { /* pack header: 10 more bytes, the last one counts stuffing bytes */
-            if (fread(h + 4, 1, 10, m->fp) != 10) {
+            if (!in_need(m, 14)) {
                 break;
             }
-            fseek(m->fp, h[13] & 7, SEEK_CUR);
+            h = m->in + m->inPos;
+            len = 14 + (size_t)(h[13] & 7);
+            if (!in_need(m, len)) {
+                break;
+            }
+            m->inPos += len;
             continue;
         }
-        if (fread(h + 4, 1, 2, m->fp) != 2) {
+        if (!in_need(m, 6)) {
             break;
         }
-        {
-            size_t len = (size_t)h[4] << 8 | h[5], skipBytes;
-            if (fread(m->pack, 1, len, m->fp) != len) {
-                break;
-            }
-            if (h[3] < 0xE0 || h[3] > 0xEF || len < 3) {
-                continue; /* system header, padding, other streams */
-            }
-            skipBytes = 3 + (size_t)m->pack[2]; /* two flag bytes, the header length, the header */
-            if (skipBytes > len) {
-                continue;
-            }
-            if (m->esSize + len > m->esCap) {
-                m->esCap = (m->esSize + len) * 2 + 65536;
-                m->es = realloc(m->es, m->esCap);
-            }
-            memcpy(m->es + m->esSize, m->pack + skipBytes, len - skipBytes);
-            m->esSize += len - skipBytes;
-            return 1;
+        h = m->in + m->inPos;
+        len = (size_t)h[4] << 8 | h[5];
+        if (!in_need(m, 6 + len)) {
+            break;
         }
+        h = m->in + m->inPos;
+        m->inPos += 6 + len;
+        if (h[3] < 0xE0 || h[3] > 0xEF || len < 3) {
+            continue; /* system header, padding, other streams */
+        }
+        skipBytes = 3 + (size_t)h[6 + 2]; /* two flag bytes, the header length, the header */
+        if (skipBytes > len) {
+            continue;
+        }
+        if (m->esSize + len > m->esCap) {
+            m->esCap = (m->esSize + len) * 2 + 65536;
+            m->es = realloc(m->es, m->esCap);
+        }
+        memcpy(m->es + m->esSize, h + 6 + skipBytes, len - skipBytes);
+        m->esSize += len - skipBytes;
+        return 1;
     }
     m->eof = 1;
     return 0;
@@ -541,24 +644,28 @@ static long find_picture(const Mpeg2 *m, size_t from) {
     return -1;
 }
 
+static void tables_ready(void);
+
 Mpeg2 *Mpeg2_Open(const char *path) {
     Mpeg2 *m;
-    FILE *fp = fopen(path, "rb");
+    intptr_t f = file_open(path);
 
-    if (fp == NULL) {
+    if (f == 0) {
         return NULL;
     }
-    if (!sVlcReady) {
-        vlc_init();
-    }
+    tables_ready();
     m = calloc(1, sizeof(Mpeg2));
-    m->fp = fp;
+    m->file = f;
+    m->in = malloc(IN_SIZE);
     return m;
 }
 
 void Mpeg2_Close(Mpeg2 *m) {
     if (m != NULL) {
-        fclose(m->fp);
+        if (m->file != 0) {
+            file_close(m->file);
+        }
+        free(m->in);
         free(m->es);
         free(m->y);
         free(m);
@@ -568,13 +675,13 @@ void Mpeg2_Close(Mpeg2 *m) {
 int Mpeg2_Width(const Mpeg2 *m) { return m->width; }
 int Mpeg2_Height(const Mpeg2 *m) { return m->height; }
 
-/* Decodes the next picture into the planes. 0 at the end. */
-static int next_planes(Mpeg2 *m) {
+/* The next unit of the stream: the first `size` bytes of m->es, everything up to the second picture start code,
+   which is one picture with the headers in front of it (and the headers of the next picture behind it, which
+   only set state). 0 at the end. unit_done() takes it out of m->es. */
+static size_t next_unit(Mpeg2 *m) {
     long first, second;
     size_t searched = 0;
 
-    /* the stream from here to the second picture start code is one picture with the headers in front of it
-       (and the headers of the next picture behind it, which only set state) */
     for (;;) {
         first = find_picture(m, 0);
         if (first >= 0) {
@@ -599,37 +706,528 @@ static int next_planes(Mpeg2 *m) {
             break;
         }
     }
+    return (size_t)second;
+}
+
+static void unit_done(Mpeg2 *m, size_t size) {
+    memmove(m->es, m->es + size, m->esSize - size);
+    m->esSize -= size;
+}
+
+/* Decodes the next picture into the planes. 0 at the end. */
+static int next_planes(Mpeg2 *m) {
+    size_t size = next_unit(m);
+
+    if (size == 0) {
+        return 0;
+    }
+#ifdef PORT_VITA /* a picture of a frame that will not be drawn is stepped over, not decoded (all pictures are intra) */
+    {
+        extern int gVitaGsSkip;
+        if (gVitaGsSkip && m->y != NULL) {
+            unit_done(m, size);
+            return 2;
+        }
+    }
+#endif
     m->havePicture = 0;
-    decode_unit(m, m->es, m->es + second);
-    memmove(m->es, m->es + second, m->esSize - (size_t)second);
-    m->esSize -= (size_t)second;
+    decode_unit(m, m->es, m->es + size);
+    unit_done(m, size);
     return m->y != NULL;
 }
 
-int Mpeg2_Next(Mpeg2 *m, uint8_t *rgba) {
-    int x, y, w, h, stride;
+/* ---- the planes as R, G, B, 255: ITU-R BT.601, 16..235 to 0..255, chroma samples repeated (16.16 fixed point:
+   R = (76309 (Y - 16) + 104597 (Cr - 128) + 32768) >> 16 and so on, cut off to 0..255). From tables: the products
+   once per value, the cut-off by index. ---- */
+static int32_t sTy[256], sTrv[256], sTgu[256], sTgv[256], sTbu[256];
+static uint8_t sClip[1024];
+static int sTablesReady;
 
-    if (!next_planes(m)) {
-        return 0;
+static void tables_ready(void) {
+    int x;
+
+    if (sTablesReady) {
+        return;
     }
-    w = m->width;
-    h = m->height;
-    stride = m->mbw * 16;
-    /* ITU-R BT.601, 16..235 to 0..255, chroma samples repeated (16.16 fixed point) */
+    vlc_init();
+    for (x = 0; x < 256; x++) {
+        sTy[x] = 76309 * (x - 16) + 32768;
+        sTrv[x] = 104597 * (x - 128);
+        sTgu[x] = -25675 * (x - 128);
+        sTgv[x] = -53279 * (x - 128);
+        sTbu[x] = 132201 * (x - 128);
+    }
+    for (x = 0; x < 1024; x++) {
+        sClip[x] = (uint8_t)(x < 384 ? 0 : x > 384 + 255 ? 255 : x - 384);
+    }
+    sTablesReady = 1;
+}
+
+static void to_rgba(const Mpeg2 *m, uint8_t *rgba) {
+    int x, y, w = m->width, h = m->height, stride = m->mbw * 16;
+
     for (y = 0; y < h; y++) {
         const uint8_t *py = m->y + y * stride, *pb = m->cb + (y >> 1) * (stride >> 1), *pr = m->cr + (y >> 1) * (stride >> 1);
-        uint8_t *o = rgba + (size_t)y * w * 4;
-        for (x = 0; x < w; x++) {
-            int c = 76309 * (py[x] - 16) + 32768, d = pb[x >> 1] - 128, e = pr[x >> 1] - 128;
-            int r = (c + 104597 * e) >> 16, g = (c - 25675 * d - 53279 * e) >> 16, b = (c + 132201 * d) >> 16;
-            o[x * 4 + 0] = (uint8_t)(r < 0 ? 0 : r > 255 ? 255 : r);
-            o[x * 4 + 1] = (uint8_t)(g < 0 ? 0 : g > 255 ? 255 : g);
-            o[x * 4 + 2] = (uint8_t)(b < 0 ? 0 : b > 255 ? 255 : b);
-            o[x * 4 + 3] = 255;
+        uint32_t *o = (uint32_t *)(void *)(rgba + (size_t)y * w * 4);
+        for (x = 0; x < w; x++) { /* (two pixels share their chroma sample) */
+            int d = pb[x >> 1], e = pr[x >> 1], r = sTrv[e], g = sTgu[d] + sTgv[e], b = sTbu[d], c = sTy[py[x]];
+            o[x] = (uint32_t)sClip[((c + r) >> 16) + 384] | (uint32_t)sClip[((c + g) >> 16) + 384] << 8 |
+                   (uint32_t)sClip[((c + b) >> 16) + 384] << 16 | 0xFF000000u;
+            if (++x < w) {
+                c = sTy[py[x]];
+                o[x] = (uint32_t)sClip[((c + r) >> 16) + 384] | (uint32_t)sClip[((c + g) >> 16) + 384] << 8 |
+                       (uint32_t)sClip[((c + b) >> 16) + 384] << 16 | 0xFF000000u;
+            }
         }
     }
+}
+
+int Mpeg2_Next(Mpeg2 *m, uint8_t *rgba) {
+    int r = next_planes(m);
+
+    if (r == 0) {
+        return 0;
+    }
+    if (r == 2) {
+        return 1; /* stepped over: the caller keeps its last picture */
+    }
+    to_rgba(m, rgba);
     return 1;
 }
+
+#if defined(MPEG2_PLAYER)
+/* ------------------------------------------------------------------------------------------------------------
+ * The player: pictures decoded ahead of time on other processor cores.
+ *
+ *   Mpeg2Player *Mpeg2Player_Open(path, workers)
+ *   int Mpeg2Player_Next(p, &rgba)   the next picture of the stream, one call per picture in order:
+ *                                    1 = here it is (valid until the next call), 0 = it was not decoded in time
+ *                                    and is left out (the caller shows the one before), -1 = the stream is over
+ *   Mpeg2Player_Close
+ *
+ * The caller asks for one picture per frame and is never made to wait for one (except the very first): the film
+ * keeps the game's time, and when the processor is too slow pictures are left out instead of the film slowing
+ * down. Workers take the stream's units in order, one worker at a time (`io`): the picture's bytes are copied
+ * out, the headers in the unit are followed in the shared context (so every worker starts its picture with the
+ * sequence state the plain decoder would have there), and the picture is decoded outside the lock. A picture the
+ * caller would ask for before it could be done (fewer than `lead` frames ahead) is not decoded at all; a worker
+ * that is `MP_WINDOW` pictures ahead of the caller waits.
+ *
+ * Every picture buffer has one owner at a time (a worker, a slot, or the caller): finished pictures change hands
+ * by exchanging pointers under `lock`, so nobody writes where somebody else reads.
+ * ------------------------------------------------------------------------------------------------------------ */
+#ifdef PORT_VITA
+typedef SceUID MpMutex;
+typedef SceUID MpThread;
+static void mp_mutex_init(MpMutex *m) { *m = sceKernelCreateMutex("bt3_movie", 0, 0, NULL); }
+static void mp_mutex_free(MpMutex *m) { sceKernelDeleteMutex(*m); }
+static void mp_lock(MpMutex *m) { sceKernelLockMutex(*m, 1, NULL); }
+static void mp_unlock(MpMutex *m) { sceKernelUnlockMutex(*m, 1); }
+static void mp_sleep(unsigned us) { sceKernelDelayThread(us); }
+static uint64_t mp_now(void) { return sceKernelGetProcessTimeWide(); }
+#else
+#include <pthread.h>
+#include <time.h>
+#include <unistd.h>
+typedef pthread_mutex_t MpMutex;
+typedef pthread_t MpThread;
+static void mp_mutex_init(MpMutex *m) { pthread_mutex_init(m, NULL); }
+static void mp_mutex_free(MpMutex *m) { pthread_mutex_destroy(m); }
+static void mp_lock(MpMutex *m) { pthread_mutex_lock(m); }
+static void mp_unlock(MpMutex *m) { pthread_mutex_unlock(m); }
+static void mp_sleep(unsigned us) { usleep(us); }
+static uint64_t mp_now(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000000u + (uint64_t)ts.tv_nsec / 1000u;
+}
+#endif
+
+#define MP_WORKERS 4
+#define MP_WINDOW 7              /* a worker starts picture n only when the caller is at n - MP_WINDOW or further */
+#define MP_SLOTS (MP_WINDOW + 1) /* finished pictures waiting: picture n in slot n % MP_SLOTS */
+#define MP_FRAME_US 33367        /* the caller's frame: two fields */
+
+/* What the headers leave behind for the pictures after them. */
+typedef struct MpState {
+    int width, height, pictureType, dcPrecision, qScaleType, intraVlc, altScan, pictureStructure, framePredFrameDct;
+    uint8_t intraMatrix[64];
+} MpState;
+
+typedef struct Mpeg2Player Mpeg2Player;
+typedef struct MpWorker {
+    Mpeg2Player *p;
+    int id;
+    MpThread thread;
+    Mpeg2 ctx;           /* decodes units; no file */
+    uint8_t *unit;       /* the bytes of the picture being decoded */
+    size_t unitCap;
+    uint8_t *rgba;       /* where it is decoded to */
+    size_t rgbaBytes;
+} MpWorker;
+
+struct Mpeg2Player {
+    Mpeg2 *stream;       /* the file, the elementary stream and the headers' state (under `io`) */
+    MpMutex io, lock;
+    MpWorker worker[MP_WORKERS];
+    int workers;
+    /* under `lock` */
+    size_t pictureBytes; /* of one decoded picture; 0 until the first one is there */
+    int quit;
+    int next;            /* the picture the next worker takes */
+    int want;            /* the picture the caller asks for next */
+    int total;           /* pictures in the stream once its end has been reached, else -1 */
+    int pending[MP_WORKERS]; /* the picture each worker is decoding, or -1 */
+    struct { int index, ready; uint8_t *rgba; } slot[MP_SLOTS]; /* index: whose turn it was (-1: nobody's); ready:
+                                                                   the picture is in rgba (0: it was left out) */
+    uint8_t *shown;      /* the caller's picture */
+    int width, height;
+    int patient;         /* Mpeg2Player_Patient: every picture is decoded and waited for (tests) */
+    int priority[2];     /* (PS Vita, for the log: the caller's thread priority and the workers') */
+    uint64_t decodeUs;   /* a running average of the time one picture takes a worker */
+    unsigned stat[4];    /* pictures given to the caller, decoded too late, left out by a worker, asked for early */
+};
+
+static void mp_state_save(const Mpeg2 *m, MpState *s) {
+    s->width = m->width; s->height = m->height; s->pictureType = m->pictureType; s->dcPrecision = m->dcPrecision;
+    s->qScaleType = m->qScaleType; s->intraVlc = m->intraVlc; s->altScan = m->altScan;
+    s->pictureStructure = m->pictureStructure; s->framePredFrameDct = m->framePredFrameDct;
+    memcpy(s->intraMatrix, m->intraMatrix, 64);
+}
+
+static void mp_state_load(Mpeg2 *m, const MpState *s) {
+    if (s->width != m->width || s->height != m->height) { /* as sequence_header() does for a new size */
+        m->width = s->width;
+        m->height = s->height;
+        m->mbw = (s->width + 15) / 16;
+        m->mbh = (s->height + 15) / 16;
+        free(m->y);
+        m->y = NULL;
+        if (m->mbw > 0 && m->mbh > 0) {
+            m->y = calloc(1, (size_t)m->mbw * m->mbh * 384);
+            m->cb = m->y + (size_t)m->mbw * m->mbh * 256;
+            m->cr = m->cb + (size_t)m->mbw * m->mbh * 64;
+            memset(m->cb, 128, (size_t)m->mbw * m->mbh * 128);
+        }
+    }
+    m->pictureType = s->pictureType; m->dcPrecision = s->dcPrecision; m->qScaleType = s->qScaleType;
+    m->intraVlc = s->intraVlc; m->altScan = s->altScan; m->pictureStructure = s->pictureStructure;
+    m->framePredFrameDct = s->framePredFrameDct;
+    memcpy(m->intraMatrix, s->intraMatrix, 64);
+}
+
+/* Pictures the caller will have moved on by while one is being decoded: such a picture is not started. */
+static int mp_lead(const Mpeg2Player *p) {
+    int lead = (int)((p->decodeUs + MP_FRAME_US / 2) / MP_FRAME_US) + 1;
+    return lead < 2 ? 2 : lead > MP_WINDOW - 1 ? MP_WINDOW - 1 : lead;
+}
+
+static void mp_work(MpWorker *w) {
+    Mpeg2Player *p = w->p;
+
+    for (;;) {
+        MpState state;
+        size_t size;
+        int index, skip, ok;
+        uint64_t t;
+
+        /* the next unit of the stream: one worker at a time */
+        mp_lock(&p->io);
+        for (;;) {
+            mp_lock(&p->lock);
+            if (p->quit || p->total >= 0) {
+                mp_unlock(&p->lock);
+                mp_unlock(&p->io);
+                return;
+            }
+            if (p->next <= p->want + MP_WINDOW) {
+                break; /* (with `lock` held) */
+            }
+            mp_unlock(&p->lock);
+            mp_unlock(&p->io);
+            mp_sleep(2000); /* far enough ahead */
+            mp_lock(&p->io);
+        }
+        index = p->next++;
+        skip = !p->patient && p->want > 0 && index < p->want + mp_lead(p); /* (the first pictures are waited for) */
+        if (!skip) {
+            p->pending[w->id] = index;
+        } else {
+            p->stat[2]++;
+            if (index >= p->want) {
+                p->slot[index % MP_SLOTS].index = index;
+                p->slot[index % MP_SLOTS].ready = 0;
+            }
+        }
+        mp_unlock(&p->lock);
+        size = next_unit(p->stream);
+        if (size == 0) {
+            mp_lock(&p->lock);
+            p->total = index;
+            p->next = index;
+            p->pending[w->id] = -1;
+            mp_unlock(&p->lock);
+            mp_unlock(&p->io);
+            return;
+        }
+        mp_state_save(p->stream, &state);
+        if (!skip) {
+            if (size > w->unitCap) {
+                free(w->unit);
+                w->unitCap = size + size / 2 + 65536;
+                w->unit = malloc(w->unitCap);
+            }
+            if (w->unit != NULL) {
+                memcpy(w->unit, p->stream->es, size);
+            }
+        }
+        decode_unit(p->stream, p->stream->es, p->stream->es + size); /* (headersOnly: what the unit leaves behind) */
+        unit_done(p->stream, size);
+        mp_unlock(&p->io);
+        if (skip) {
+            continue;
+        }
+
+        /* the picture: nobody else is concerned */
+        t = mp_now();
+        ok = 0;
+        if (w->unit != NULL) {
+            mp_state_load(&w->ctx, &state);
+            w->ctx.havePicture = 0;
+            decode_unit(&w->ctx, w->unit, w->unit + size);
+            if (w->ctx.y != NULL && w->ctx.havePicture && w->ctx.width > 0 && w->ctx.height > 0) {
+                size_t bytes = (size_t)w->ctx.width * (size_t)w->ctx.height * 4;
+                if (w->rgba != NULL && bytes != w->rgbaBytes) {
+                    free(w->rgba);
+                    w->rgba = NULL;
+                }
+                if (w->rgba == NULL) {
+                    w->rgba = malloc(bytes);
+                    w->rgbaBytes = bytes;
+                }
+                if (w->rgba != NULL) {
+                    to_rgba(&w->ctx, w->rgba);
+                    ok = 1;
+                }
+            }
+        }
+#ifdef MP_TEST_DELAY /* (tests on a fast machine: a slow processor's time for a picture) */
+        mp_sleep(MP_TEST_DELAY);
+#endif
+        t = mp_now() - t;
+        mp_lock(&p->lock);
+        p->pending[w->id] = -1;
+        p->decodeUs = p->decodeUs == 0 ? t : (p->decodeUs * 7 + t) / 8;
+        if (ok && p->pictureBytes == 0) { /* every picture of a film has the first one's size */
+            p->pictureBytes = w->rgbaBytes;
+            p->width = w->ctx.width;
+            p->height = w->ctx.height;
+        }
+        if (index >= p->want) {
+            p->slot[index % MP_SLOTS].index = index;
+            p->slot[index % MP_SLOTS].ready = ok && w->rgbaBytes == p->pictureBytes;
+            if (p->slot[index % MP_SLOTS].ready) {
+                uint8_t *mine = w->rgba;
+                w->rgba = p->slot[index % MP_SLOTS].rgba;
+                p->slot[index % MP_SLOTS].rgba = mine;
+            }
+        } else {
+            p->stat[1]++;
+        }
+        mp_unlock(&p->lock);
+    }
+}
+
+#ifdef PORT_VITA
+static int mp_entry(SceSize args, void *argp) {
+    (void)args;
+    mp_work(*(MpWorker **)argp);
+    return 0;
+}
+#else
+static void *mp_entry(void *arg) {
+    mp_work(arg);
+    return NULL;
+}
+#endif
+
+Mpeg2Player *Mpeg2Player_Open(const char *path, int workers) {
+    Mpeg2 *stream = Mpeg2_Open(path);
+    Mpeg2Player *p;
+    int i;
+
+    if (stream == NULL) {
+        return NULL;
+    }
+    p = calloc(1, sizeof(*p));
+    if (p == NULL) {
+        Mpeg2_Close(stream);
+        return NULL;
+    }
+    stream->headersOnly = 1;
+    p->stream = stream;
+    p->total = -1;
+    p->workers = workers < 1 ? 1 : workers > MP_WORKERS ? MP_WORKERS : workers;
+    for (i = 0; i < MP_SLOTS; i++) {
+        p->slot[i].index = -1;
+    }
+    mp_mutex_init(&p->io);
+    mp_mutex_init(&p->lock);
+#ifdef PORT_VITA
+    if (p->io < 0 || p->lock < 0) { /* no mutexes: no player (the caller decodes on its own thread) */
+        if (p->io >= 0) { mp_mutex_free(&p->io); }
+        if (p->lock >= 0) { mp_mutex_free(&p->lock); }
+        Mpeg2_Close(stream);
+        free(p);
+        return NULL;
+    }
+#endif
+    for (i = 0; i < p->workers; i++) {
+        MpWorker *w = &p->worker[i];
+        w->p = p;
+        w->id = i;
+        p->pending[i] = -1;
+    }
+    for (i = 0; i < p->workers; i++) {
+        MpWorker *w = &p->worker[i];
+#ifdef PORT_VITA
+        /* below the game's thread (which only asks for a picture now and then and must never be kept waiting by
+           the decoding); one worker on each of the three cores a program may use, so that they are certain to run
+           side by side (the game's thread takes its time from whichever of them shares its core) */
+        static const int kCore[3] = {SCE_KERNEL_CPU_MASK_USER_1, SCE_KERNEL_CPU_MASK_USER_2, SCE_KERNEL_CPU_MASK_USER_0};
+        int mine = sceKernelGetThreadCurrentPriority(), prio = mine >= 64 && mine <= 183 ? mine + 8 : 168;
+        if (prio < 160) {
+            prio = 160;
+        }
+        p->priority[0] = mine;
+        p->priority[1] = prio;
+        w->thread = sceKernelCreateThread("bt3_movie", mp_entry, prio, 0x40000, 0, i < 3 ? kCore[i] : SCE_KERNEL_CPU_MASK_USER_ALL, NULL);
+        if (w->thread < 0 || sceKernelStartThread(w->thread, sizeof(w), &w) < 0) {
+            if (w->thread >= 0) {
+                sceKernelDeleteThread(w->thread);
+            }
+            p->workers = i;
+            break;
+        }
+#else
+        if (pthread_create(&w->thread, NULL, mp_entry, w) != 0) {
+            p->workers = i;
+            break;
+        }
+#endif
+    }
+    if (p->workers == 0) {
+        mp_mutex_free(&p->io);
+        mp_mutex_free(&p->lock);
+        Mpeg2_Close(stream);
+        free(p);
+        return NULL;
+    }
+    return p;
+}
+
+void Mpeg2Player_Close(Mpeg2Player *p) {
+    int i;
+
+    if (p == NULL) {
+        return;
+    }
+    mp_lock(&p->lock);
+    p->quit = 1;
+    mp_unlock(&p->lock);
+    for (i = 0; i < p->workers; i++) {
+        MpWorker *w = &p->worker[i];
+#ifdef PORT_VITA
+        sceKernelWaitThreadEnd(w->thread, NULL, NULL);
+        sceKernelDeleteThread(w->thread);
+#else
+        pthread_join(w->thread, NULL);
+#endif
+        free(w->ctx.y);
+        free(w->unit);
+        free(w->rgba);
+    }
+    for (i = 0; i < MP_SLOTS; i++) {
+        free(p->slot[i].rgba);
+    }
+    free(p->shown);
+    mp_mutex_free(&p->io);
+    mp_mutex_free(&p->lock);
+    Mpeg2_Close(p->stream);
+    free(p);
+}
+
+void Mpeg2Player_Patient(Mpeg2Player *p) { /* (before the first Mpeg2Player_Next) */
+    mp_lock(&p->lock);
+    p->patient = 1;
+    mp_unlock(&p->lock);
+}
+
+int Mpeg2Player_Workers(const Mpeg2Player *p, int priority[2]) {
+    priority[0] = p->priority[0];
+    priority[1] = p->priority[1];
+    return p->workers;
+}
+
+int Mpeg2Player_Width(const Mpeg2Player *p) { return p->width; }
+int Mpeg2Player_Height(const Mpeg2Player *p) { return p->height; }
+
+/* For the log: pictures given to the caller, decoded too late, left out by a worker, asked for early; the average
+   time of one picture in microseconds. */
+void Mpeg2Player_Stats(Mpeg2Player *p, unsigned stat[4], unsigned *decodeUs) {
+    mp_lock(&p->lock);
+    memcpy(stat, p->stat, sizeof(p->stat));
+    *decodeUs = (unsigned)p->decodeUs;
+    mp_unlock(&p->lock);
+}
+
+/* `patience`: microseconds the caller can spare for a picture that a worker is busy with (0: none). */
+int Mpeg2Player_Next(Mpeg2Player *p, const uint8_t **rgba, unsigned patience) {
+    uint64_t start = mp_now();
+    int n, result;
+
+    mp_lock(&p->lock);
+    n = p->want;
+    for (;;) {
+        int k, coming = 0;
+
+        if (p->slot[n % MP_SLOTS].index == n) {
+            result = p->slot[n % MP_SLOTS].ready;
+            if (result) {
+                uint8_t *mine = p->shown;
+                p->shown = p->slot[n % MP_SLOTS].rgba;
+                p->slot[n % MP_SLOTS].rgba = mine;
+                *rgba = p->shown;
+                p->stat[0]++;
+            }
+            p->slot[n % MP_SLOTS].index = -1;
+            break;
+        }
+        if (p->total >= 0 && n >= p->total) {
+            result = -1;
+            break;
+        }
+        /* not there. The first picture is waited for (the workers have only just started); any other one only
+           while a worker is busy with it, and only as long as the caller can spare */
+        for (k = 0; k < p->workers; k++) {
+            coming |= p->pending[k] == n;
+        }
+        if (!p->patient && (n == 0 ? mp_now() - start > 2000000u : (!coming || mp_now() - start >= patience))) {
+            p->stat[3]++;
+            result = 0;
+            break;
+        }
+        mp_unlock(&p->lock);
+        mp_sleep(1000);
+        mp_lock(&p->lock);
+    }
+    if (result >= 0) {
+        p->want = n + 1;
+    }
+    mp_unlock(&p->lock);
+    return result;
+}
+#endif /* MPEG2_PLAYER */
 
 #ifdef MPEG2_TEST
 int main(int argc, char **argv) {

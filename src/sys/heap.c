@@ -70,7 +70,11 @@ HeapBlock *Heap_NextBlock(HeapBlock *block) {
 }
 
 void Heap_Create(void) {
+#ifdef PORT_VITA /* the end of the PS2 program as a number: no symbol can have that address in a Vita program */
+    s32 size = 0x1EFB000 - 0x3BE71C;
+#else
     s32 size = 0x1EFB000 - (u32)D_3BE71C;
+#endif
     HeapBlock *start;
 
     size += Mem_Align4Pad(size);

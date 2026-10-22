@@ -642,6 +642,9 @@ void StgFx_Term(void) {
 }
 
 /* First draw pass (after the scene): steps the tints, then the depth-based filters the stage turns on. */
+#ifdef PORT_VITA
+extern void Vita_FilmFxNote(unsigned bits, unsigned flagsHi, unsigned flagsLo); /* the film's notes */
+#endif
 void StgFx_DrawPre(void) {
     if (*gStgFx == 0) {
         StgTint_Update();
@@ -661,6 +664,10 @@ void StgFx_DrawPre(void) {
             StgHaze_DrawAll();
         }
         StgTint_DrawBack();
+#ifdef PORT_VITA
+        Vita_FilmFxNote((BtlStage_HasFeature(3) ? 1u : 0u) | (BtlStage_HasFeature(0xD) ? 2u : 0u) | (BtlStage_HasFeature(9) ? 4u : 0u),
+                        (unsigned)(Battle_GetWork()->flags >> 32), (unsigned)Battle_GetWork()->flags);
+#endif
     }
 }
 

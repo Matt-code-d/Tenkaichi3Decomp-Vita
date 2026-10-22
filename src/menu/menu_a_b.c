@@ -65,10 +65,22 @@ s32 Progress_Main(s32 arg) {
     s32 ret;
 
     Pad_SetRepeat(0x28, 3);
+#ifdef PORT_VITA
+    { /* the touch screen's menu gestures (port/vita/vita_touch.c); a test can start on a given screen (bt3.txt startmode=) */
+        extern int gVitaInMenus, gVitaStartMode;
+        gVitaInMenus = 1;
+        if (gVitaStartMode > 0) {
+            gProgress->mode = gVitaStartMode;
+        }
+    }
+#endif
     if (gProgress->flags & MPROG_FIRST_RUN) {
         FirstRun_Main();
         gProgress->flags &= ~MPROG_FIRST_RUN;
     }
+#ifdef PORT_VITA
+    { extern int gVitaStartMode; gVitaStartMode = 0; } /* (once: FirstRun_Main skipped the opening film for it) */
+#endif
     flags = BattleResult_GetFlags();
     reason = BattleResult_GetReason();
     if (flags & 8) {
@@ -103,6 +115,9 @@ s32 Progress_Main(s32 arg) {
     Snd_LoadBankFile(2, 0x14C);
 
     do {
+#ifdef PORT_VITA
+        { extern int gVitaMenuMode; gVitaMenuMode = gProgress->mode; }
+#endif
         switch (gProgress->mode) {
         case 2:
             PadWatch_SetEnabled(0);
@@ -228,5 +243,8 @@ s32 Progress_Main(s32 arg) {
     MENU_ARC_FREE(gMenuArc9);
     MENU_ARC_FREE(gMenuArc10);
     MENU_ARC_FREE(gMenuArc11);
+#ifdef PORT_VITA
+    { extern int gVitaInMenus; gVitaInMenus = 0; }
+#endif
     return 0;
 }

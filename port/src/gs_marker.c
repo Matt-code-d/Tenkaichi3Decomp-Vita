@@ -18,3 +18,15 @@ void Port_GsMarker(int effect) {
 
     Dma_AddData(pkt, sizeof(pkt));
 }
+
+/* (Vita) A marker with a 32-bit value of its own (in the register's upper word): gs_core.c hands it over in
+   gGsMarkerArg before the marker itself. */
+void Port_GsMarkerArg(int effect, unsigned arg) {
+    uint32_t pkt[12] = {
+        0x10000000u | 2, 0, 0x10000000u, 0x50000000u | 2,
+        0x8000u | 1, 0x10000000u, 0xE, 0,
+        (uint32_t)effect, (uint32_t)arg, 0x7F, 0,
+    };
+
+    Dma_AddData(pkt, sizeof(pkt));
+}

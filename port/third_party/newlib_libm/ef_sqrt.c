@@ -42,7 +42,14 @@ static	float	one	= 1.0, tiny=1.0e-30;
 					   sqrt(-inf)=sNaN */
     /* take care of zero and -ves */
 	if(FLT_UWORD_IS_ZERO(hx)) return x;/* sqrt(+-0) = +-0 */
+#ifdef PORT_VITA
+	/* (Vita, hardware floats) the PS2 has no NaN: its 0 / 0 here gives the largest number, which the game's
+	   callers survive (Quat_FromVectors: a dot product a hair under -1 in a chain of hair or tails). A NaN went
+	   on into the bones and drew a thin line across the picture (the Bardock fight). */
+	if(ix<0) return 3.40282347e+38f;
+#else
 	if(ix<0) return (x-x)/(x-x);		/* sqrt(-ve) = sNaN */
+#endif
 
     /* normalize x */
 	m = (ix>>23);

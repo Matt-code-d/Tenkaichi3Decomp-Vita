@@ -193,6 +193,12 @@ void DuelMenu_Init(s32 section) {
     memset(DM, 0, 0x194);
     DM->pack = (u32 *)MPACK_AT(gMenuArc5, section);
     DM->res = Sprite_Unpack(DM->pack, NULL, NULL);
+#ifdef PORT_VITA
+    {
+        extern void Vita_VersusArt(void *res); /* port/vita/vita_optart.c: the second plate reads "Multiplayer" */
+        Vita_VersusArt(DM->res);
+    }
+#endif
     DM_RES(1);
     DM->bg = res;
     DM_RES(2);

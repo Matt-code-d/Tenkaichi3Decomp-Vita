@@ -350,7 +350,14 @@ void BtlText_DrawList(void *pkt, s32 x0, s32 x1, s32 y0, s32 y1, s32 mode) {
             case '#':
                 if (entry == list->cursor[list->page]) {
                     Font_SetColor2RGBA(BTLTEXT_COL(128.0f), BTLTEXT_COL(128.0f), BTLTEXT_COL(128.0f), 0x80);
+#ifdef PORT_VITA
+                    {   /* the buttons as the Vita's controls have them (port/vita/vita_text.c) */
+                        extern u16 *Vita_PadLine(u16 *line, s32 pad);
+                        Font_PrintAt(x0 + 0xF, y, Vita_PadLine(p + 1, side));
+                    }
+#else
                     Font_PrintAt(x0 + 0xF, y, p + 1);
+#endif
                     y += 0x1C;
                     Font_SetColor2RGBA(0x80, 0x80, 0x80, 0x80);
                     if (work->unk10 == 1) {

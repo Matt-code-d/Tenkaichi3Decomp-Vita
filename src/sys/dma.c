@@ -78,9 +78,40 @@ void Dma_Flush(void) {
     p[1] = 0;
     p[2] = 0;
     p[3] = 0;
+#ifdef PORT_VITA
+    {   /* PS Vita: the list is drawn on another thread while the game goes on, and may take longer than a frame.
+           A third buffer takes turns with the two, so the list sent before this one may still be unfinished
+           when the next is written (port/src/gs/gs_core.c waits for the one before that). */
+        extern int gVitaDmaFlush, gVitaTriple;
+        extern u32 Port_DmaSpare(u32 size);
+        static u32 spare;
+        u32 t;
+
+        if (spare == 0) {
+            spare = Port_DmaSpare(DMA_BUF_SIZE);
+        }
+        {   /* (the three buffers, for the renderer: what lies in them is rewritten every frame) */
+            extern u32 gPortDmaBufs[3];
+            gPortDmaBufs[0] = gDmaBuf[0];
+            gPortDmaBufs[1] = gDmaBuf[1];
+            gPortDmaBufs[2] = spare;
+        }
+        gVitaDmaFlush = 1;
+        Dma_SendVif1(gDmaBuf[gDmaBufIdx]);
+        gDmaBufIdx ^= 1;
+        if (gVitaTriple) {
+            t = gDmaBuf[gDmaBufIdx];
+            gDmaBuf[gDmaBufIdx] = spare;
+            gDmaBufEnd[gDmaBufIdx] = spare + DMA_BUF_SIZE;
+            spare = t;
+        }
+        gDmaCur = (u32 *)gDmaBuf[gDmaBufIdx];
+    }
+#else
     Dma_SendVif1(gDmaBuf[gDmaBufIdx]);
     gDmaBufIdx ^= 1;
     gDmaCur = (u32 *)gDmaBuf[gDmaBufIdx];
+#endif
 }
 
 /* Reserves `size` bytes (whole quadwords) in the display list and returns where they start. */
@@ -122,6 +153,12 @@ void Dma_EndDirect(u64 *end) {
 
 /* Makes both buffers an empty list (a lone END tag) and rewinds the cursor to the current one. */
 void Dma_ResetBuffers(void) {
+#ifdef PORT_VITA
+    {
+        extern void Port_GsSync(void);
+        Port_GsSync(); /* (no list is being drawn from them) */
+    }
+#endif
     ((u32 *)gDmaBuf[0])[0] = DMA_TAG_END;
     ((u32 *)gDmaBuf[0])[1] = 0;
     ((u32 *)gDmaBuf[0])[2] = 0;
