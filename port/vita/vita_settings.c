@@ -384,13 +384,10 @@ void Vita_SettingsPoll(void) {
             sSelectDownUs = now;
             sSelectWasDown = 1;
         } else if (now - sSelectDownUs >= HOLD_US) {
+            /* Open as soon as the hold reaches 1s (do not wait for release).
+             * SELECT is already down, so it will not count as a fresh press to close. */
             sSelectWasDown = 0;
             sSelectDownUs = 0;
-            while ((pad.buttons & SCE_CTRL_SELECT) != 0) {
-                sceKernelDelayThread(20000);
-                memset(&pad, 0, sizeof(pad));
-                sceCtrlPeekBufferPositive(0, &pad, 1);
-            }
             run_overlay();
         }
     } else {
