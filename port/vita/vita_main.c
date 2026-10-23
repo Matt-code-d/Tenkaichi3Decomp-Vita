@@ -11,6 +11,11 @@
  *   bt3.txt            optional, one name=value per line. The released program reads:
  *                        disc=<folder>     another place for the disc files
  *                        wide=0            the console's 4:3 picture in the middle of the screen
+ *                        hudstyle=1        HUD centred (0 = panels at the edges when wide)
+ *                        menu43=1          menus in 4:3 with side bars while fights stay wide
+ *                        skiplogo=1        skip boot logos and copyright
+ *                        skipintro=1       skip opening movie
+ *                        fxmask=<bits>     effects left out: 1 table, 2 glow, 4 WT, 8 outline
  *                        heap=cdram        the game heap in graphics memory (see vita_mem.c)
  *                        report=1          speed figures every two seconds into the log
  *                        lang=it           European language (en/es/de/fr/it) when pzs3eu1/ is present
@@ -1017,7 +1022,9 @@ static void read_settings(void) {
         /* the released program: only the player's settings. The test runs leave theirs in the same file
            (mode=demo, film=...): a game started from its bubble goes to its title screen, not into a test fight */
         if (strcmp(line, "disc") != 0 && strcmp(line, "heap") != 0 && strcmp(line, "wide") != 0 &&
-            strcmp(line, "report") != 0 && strcmp(line, "lang") != 0) {
+            strcmp(line, "report") != 0 && strcmp(line, "lang") != 0 && strcmp(line, "hudstyle") != 0 &&
+            strcmp(line, "menu43") != 0 && strcmp(line, "skiplogo") != 0 && strcmp(line, "skipintro") != 0 &&
+            strcmp(line, "fxmask") != 0) {
             continue;
         }
 #endif
@@ -1051,6 +1058,22 @@ static void read_settings(void) {
         } else if (strcmp(line, "wide") == 0) {
             extern int gVitaWide;
             gVitaWide = atoi(eq) != 0; /* wide=0: the console's 4:3 picture with bars at the sides */
+        } else if (strcmp(line, "hudstyle") == 0) {
+            extern int gVitaHudStyle;
+            gVitaHudStyle = atoi(eq) != 0; /* 0 edges, 1 centre */
+        } else if (strcmp(line, "menu43") == 0) {
+            extern int gVitaMenu43;
+            gVitaMenu43 = atoi(eq) != 0; /* menus stay 4:3 with side bars while fights are wide */
+        } else if (strcmp(line, "skiplogo") == 0) {
+            extern int gVitaSkipLogos;
+            gVitaSkipLogos = atoi(eq) != 0;
+        } else if (strcmp(line, "skipintro") == 0) {
+            extern int gVitaSkipIntro;
+            gVitaSkipIntro = atoi(eq) != 0;
+        } else if (strcmp(line, "fxmask") == 0) {
+            /* bits off: 1 table, 2 glow, 4 work-target FX, 8 outline (vita_vgl.c gVitaFxMask) */
+            extern int gVitaFxMask;
+            gVitaFxMask = (int)strtol(eq, NULL, 0);
         } else if (strcmp(line, "msaa") == 0) { /* the chip's multisampling: 0, 2 or 4 */
             extern int gVitaMsaa;
             gVitaMsaa = atoi(eq);

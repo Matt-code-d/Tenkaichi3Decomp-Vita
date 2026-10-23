@@ -20,9 +20,37 @@
 #define MENU_W 960.0f
 #define MENU_H 544.0f
 
+enum {
+    ROW_LANG = 0,
+    ROW_WIDE,
+    ROW_HUD,
+    ROW_MENU43,
+    ROW_SKIPLOGO,
+    ROW_SKIPINTRO,
+    ROW_OUTLINE,
+    ROW_GLOW,
+    ROW_UNLOCK,
+    ROW_RESUME,
+    ROW_COUNT
+};
+
+#define VISIBLE_ROWS 7
+
 extern int gVitaWide;
+extern int gVitaHudStyle;
+extern int gVitaMenu43;
+extern int gVitaSkipLogos;
+extern int gVitaSkipIntro;
+extern int gVitaFxMask;
 extern void Vita_Log(const char *fmt, ...);
+extern void Vita_RefreshView(void);
+extern void Port_SetAspectMilli(int milli);
 extern void vglSwapBuffers(GLboolean has_commondialog);
+
+/* Game save unlock (sys/save.c). gSaveData is NULL before Save_Init. */
+typedef struct SaveData SaveData;
+extern SaveData *gSaveData;
+extern void Save_UnlockAll(SaveData *opt);
 
 static int sOpen;
 static unsigned long long sSelectDownUs;
@@ -138,6 +166,28 @@ static void bt3_set(const char *name, const char *value) {
     rename(tmp, path);
 }
 
+static void bt3_set_int(const char *name, int value) {
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%d", value);
+    bt3_set(name, buf);
+}
+
+static void apply_wide(int wide) {
+    gVitaWide = wide != 0;
+    Port_SetAspectMilli(gVitaWide ? 1765 : 1333);
+    Vita_RefreshView();
+    bt3_set_int("wide", gVitaWide);
+}
+
+static void apply_fx_bit(int bit, int enabled) {
+    if (enabled) {
+        gVitaFxMask &= ~bit;
+    } else {
+        gVitaFxMask |= bit;
+    }
+    bt3_set_int("fxmask", gVitaFxMask);
+}
+
 /* Pixel top-left (0,0) → NDC (vitaGL fixed pipeline, same idea as the movie blit). */
 static void px_to_ndc(float x, float y, float *ox, float *oy) {
     *ox = (x / MENU_W) * 2.0f - 1.0f;
@@ -217,10 +267,48 @@ static unsigned buttons(void) {
     return pad.buttons;
 }
 
-static void draw_menu(int cursor, int lang, int wide, int langDirty, int editingLang) {
+static void row_label(int row, int lang, char *out, size_t outSz) {
+    switch (row) {
+    case ROW_LANG:
+        snprintf(out, outSz, "Language: %s", VitaEu_Available() ? VitaEu_LocaleName(lang) : "(no pzs3eu1)");
+        break;
+    case ROW_WIDE:
+        snprintf(out, outSz, "Widescreen: %s", gVitaWide ? "On" : "Off");
+        break;
+    case ROW_HUD:
+        snprintf(out, outSz, "HUD style: %s", gVitaHudStyle ? "Centre" : "Edges");
+        break;
+    case ROW_MENU43:
+        snprintf(out, outSz, "Menus in 4:3: %s", gVitaMenu43 ? "On" : "Off");
+        break;
+    case ROW_SKIPLOGO:
+        snprintf(out, outSz, "Skip logos: %s", gVitaSkipLogos ? "On" : "Off");
+        break;
+    case ROW_SKIPINTRO:
+        snprintf(out, outSz, "Skip intro: %s", gVitaSkipIntro ? "On" : "Off");
+        break;
+    case ROW_OUTLINE:
+        snprintf(out, outSz, "Outline: %s", (gVitaFxMask & 8) ? "Off" : "On");
+        break;
+    case ROW_GLOW:
+        snprintf(out, outSz, "Glow: %s", (gVitaFxMask & 2) ? "Off" : "On");
+        break;
+    case ROW_UNLOCK:
+        snprintf(out, outSz, "Unlock everything...");
+        break;
+    case ROW_RESUME:
+        snprintf(out, outSz, "Resume game");
+        break;
+    default:
+        out[0] = '\0';
+        break;
+    }
+}
+
+static void draw_menu(int cursor, int scroll, int lang, int langDirty, int editingLang, int confirmUnlock) {
     int count = VitaEu_LocaleCount();
     int i;
-    float px = 220.0f, py = 120.0f, pw = 520.0f, ph = editingLang ? 320.0f : 280.0f;
+    float px = 140.0f, py = 40.0f, pw = 680.0f, ph = 460.0f;
     char line[96];
 
     glViewport(0, 0, (GLsizei)MENU_W, (GLsizei)MENU_H);
@@ -233,12 +321,22 @@ static void draw_menu(int cursor, int lang, int wide, int langDirty, int editing
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
 
-    /* Dim whole screen (Adrenaline-like). */
     draw_quad(0, 0, MENU_W, MENU_H, 0.0f, 0.0f, 0.0f, 0.55f);
-    /* Panel */
     draw_quad(px, py, px + pw, py + ph, 0.05f, 0.08f, 0.05f, 0.92f);
     draw_quad(px, py, px + pw, py + 36.0f, 0.0f, 0.35f, 0.12f, 1.0f);
-    draw_text(px + 140.0f, py + 10.0f, 2.0f, 0.6f, 1.0f, 0.6f, "BT3 SETTINGS");
+    draw_text(px + 200.0f, py + 10.0f, 2.0f, 0.6f, 1.0f, 0.6f, "BT3 SETTINGS");
+
+    if (confirmUnlock) {
+        draw_text(px + 24.0f, py + 80.0f, 2.0f, 1.0f, 0.9f, 0.4f, "Unlock everything?");
+        draw_text(px + 24.0f, py + 120.0f, 1.5f, 0.85f, 0.85f, 0.7f, "All characters, stages, items.");
+        draw_text(px + 24.0f, py + 148.0f, 1.5f, 0.85f, 0.85f, 0.7f, "Save to card afterwards.");
+        draw_text(px + 24.0f, py + 200.0f, 2.0f, cursor == 0 ? 0.5f : 0.9f, 1.0f, cursor == 0 ? 0.5f : 0.9f,
+                  cursor == 0 ? "> Yes, unlock" : "  Yes, unlock");
+        draw_text(px + 24.0f, py + 240.0f, 2.0f, cursor == 1 ? 0.5f : 0.9f, 1.0f, cursor == 1 ? 0.5f : 0.9f,
+                  cursor == 1 ? "> Cancel" : "  Cancel");
+        draw_text(px + 24.0f, py + ph - 40.0f, 1.5f, 0.7f, 0.85f, 0.5f, "UP/DOWN  X:OK  O:back");
+        return;
+    }
 
     if (editingLang) {
         draw_text(px + 24.0f, py + 50.0f, 2.0f, 0.8f, 0.9f, 0.8f, "Language");
@@ -255,36 +353,83 @@ static void draw_menu(int cursor, int lang, int wide, int langDirty, int editing
         return;
     }
 
-    {
-        const char *rows[3];
-        char a[64], b[64];
-        snprintf(a, sizeof(a), "Language: %s", VitaEu_Available() ? VitaEu_LocaleName(lang) : "(no pzs3eu1)");
-        snprintf(b, sizeof(b), "Widescreen: %s", wide ? "On" : "Off");
-        rows[0] = a;
-        rows[1] = b;
-        rows[2] = "Resume game";
-        for (i = 0; i < 3; i++) {
-            float yy = py + 70.0f + (float)i * 40.0f;
-            int sel = (i == cursor);
-            if (sel) {
-                draw_quad(px + 16.0f, yy - 6.0f, px + pw - 16.0f, yy + 28.0f, 0.0f, 0.45f, 0.15f, 1.0f);
-            }
-            snprintf(line, sizeof(line), "%s %s", sel ? ">" : " ", rows[i]);
-            draw_text(px + 32.0f, yy, 2.0f, sel ? 0.5f : 0.9f, 1.0f, sel ? 0.5f : 0.9f, line);
+    for (i = 0; i < VISIBLE_ROWS; i++) {
+        int row = scroll + i;
+        float yy = py + 56.0f + (float)i * 44.0f;
+        int sel;
+        char label[80];
+
+        if (row >= ROW_COUNT) {
+            break;
         }
+        sel = (row == cursor);
+        row_label(row, lang, label, sizeof(label));
+        if (sel) {
+            draw_quad(px + 16.0f, yy - 6.0f, px + pw - 16.0f, yy + 30.0f, 0.0f, 0.45f, 0.15f, 1.0f);
+        }
+        snprintf(line, sizeof(line), "%s %s", sel ? ">" : " ", label);
+        draw_text(px + 32.0f, yy, 2.0f, sel ? 0.5f : 0.9f, 1.0f, sel ? 0.5f : 0.9f, line);
     }
-    draw_text(px + 24.0f, py + ph - 50.0f, 1.5f, 0.7f, 0.85f, 0.5f, "UP/DOWN  X:OK  O:close");
+    if (scroll > 0) {
+        draw_text(px + pw - 60.0f, py + 48.0f, 1.5f, 0.5f, 0.8f, 0.5f, "^");
+    }
+    if (scroll + VISIBLE_ROWS < ROW_COUNT) {
+        draw_text(px + pw - 60.0f, py + ph - 70.0f, 1.5f, 0.5f, 0.8f, 0.5f, "v");
+    }
+    draw_text(px + 24.0f, py + ph - 50.0f, 1.5f, 0.7f, 0.85f, 0.5f, "UP/DOWN  L/R or X:change  O:close");
     if (langDirty) {
         draw_text(px + 24.0f, py + ph - 28.0f, 1.5f, 1.0f, 0.85f, 0.2f, "Restart to apply language");
     }
 }
 
+static void toggle_row(int cursor) {
+    switch (cursor) {
+    case ROW_WIDE:
+        apply_wide(!gVitaWide);
+        Vita_Log("vita: settings widescreen %d\n", gVitaWide);
+        break;
+    case ROW_HUD:
+        gVitaHudStyle = !gVitaHudStyle;
+        bt3_set_int("hudstyle", gVitaHudStyle);
+        Vita_Log("vita: settings hudstyle %d\n", gVitaHudStyle);
+        break;
+    case ROW_MENU43:
+        gVitaMenu43 = !gVitaMenu43;
+        bt3_set_int("menu43", gVitaMenu43);
+        Vita_RefreshView();
+        Vita_Log("vita: settings menu43 %d\n", gVitaMenu43);
+        break;
+    case ROW_SKIPLOGO:
+        gVitaSkipLogos = !gVitaSkipLogos;
+        bt3_set_int("skiplogo", gVitaSkipLogos);
+        Vita_Log("vita: settings skiplogo %d\n", gVitaSkipLogos);
+        break;
+    case ROW_SKIPINTRO:
+        gVitaSkipIntro = !gVitaSkipIntro;
+        bt3_set_int("skipintro", gVitaSkipIntro);
+        Vita_Log("vita: settings skipintro %d\n", gVitaSkipIntro);
+        break;
+    case ROW_OUTLINE:
+        apply_fx_bit(8, (gVitaFxMask & 8) != 0); /* currently off → turn on */
+        Vita_Log("vita: settings outline %s\n", (gVitaFxMask & 8) ? "off" : "on");
+        break;
+    case ROW_GLOW:
+        apply_fx_bit(2, (gVitaFxMask & 2) != 0);
+        Vita_Log("vita: settings glow %s\n", (gVitaFxMask & 2) ? "off" : "on");
+        break;
+    default:
+        break;
+    }
+}
+
 static void run_overlay(void) {
     int count = VitaEu_LocaleCount();
-    int lang = 0, i, wide = gVitaWide != 0;
-    int cursor = 0;
+    int lang = 0, i;
+    int cursor = 0, scroll = 0;
     int langDirty = 0;
     int editingLang = 0;
+    int confirmUnlock = 0;
+    int unlockCursor = 1; /* default Cancel */
     const char *cur = VitaEu_Locale();
     unsigned prev = 0, now, pressed;
 
@@ -303,6 +448,29 @@ static void run_overlay(void) {
         now = buttons();
         pressed = now & ~prev;
         prev = now;
+
+        if (confirmUnlock) {
+            if (pressed & (SCE_CTRL_UP | SCE_CTRL_DOWN | SCE_CTRL_LEFT | SCE_CTRL_RIGHT)) {
+                unlockCursor ^= 1;
+            } else if (pressed & SCE_CTRL_CROSS) {
+                if (unlockCursor == 0) {
+                    if (gSaveData != NULL) {
+                        Save_UnlockAll(gSaveData);
+                        Vita_Log("vita: settings UnlockAll applied\n");
+                    } else {
+                        Vita_Log("vita: settings UnlockAll skipped (no save)\n");
+                    }
+                }
+                confirmUnlock = 0;
+            } else if (pressed & (SCE_CTRL_CIRCLE | SCE_CTRL_SELECT)) {
+                confirmUnlock = 0;
+            }
+            draw_menu(unlockCursor, 0, lang, langDirty, 0, 1);
+            vglSwapBuffers(GL_FALSE);
+            sceKernelPowerTick(SCE_KERNEL_POWER_TICK_DISABLE_AUTO_SUSPEND);
+            sceKernelDelayThread(16000);
+            continue;
+        }
 
         if (editingLang) {
             if (pressed & (SCE_CTRL_UP | SCE_CTRL_LEFT)) {
@@ -328,35 +496,37 @@ static void run_overlay(void) {
             }
         } else {
             if (pressed & SCE_CTRL_UP) {
-                cursor = (cursor + 2) % 3;
+                cursor = (cursor + ROW_COUNT - 1) % ROW_COUNT;
             } else if (pressed & SCE_CTRL_DOWN) {
-                cursor = (cursor + 1) % 3;
+                cursor = (cursor + 1) % ROW_COUNT;
             } else if (pressed & (SCE_CTRL_LEFT | SCE_CTRL_RIGHT)) {
-                if (cursor == 1) {
-                    wide = !wide;
-                    gVitaWide = wide;
-                    bt3_set("wide", wide ? "1" : "0");
-                    Vita_Log("vita: settings widescreen %d\n", wide);
-                } else if (cursor == 0) {
+                if (cursor == ROW_LANG) {
                     editingLang = 1;
+                } else if (cursor != ROW_UNLOCK && cursor != ROW_RESUME) {
+                    toggle_row(cursor);
                 }
             } else if (pressed & SCE_CTRL_CROSS) {
-                if (cursor == 0) {
+                if (cursor == ROW_LANG) {
                     editingLang = 1;
-                } else if (cursor == 1) {
-                    wide = !wide;
-                    gVitaWide = wide;
-                    bt3_set("wide", wide ? "1" : "0");
-                    Vita_Log("vita: settings widescreen %d\n", wide);
-                } else {
+                } else if (cursor == ROW_UNLOCK) {
+                    confirmUnlock = 1;
+                    unlockCursor = 1;
+                } else if (cursor == ROW_RESUME) {
                     break;
+                } else {
+                    toggle_row(cursor);
                 }
             } else if (pressed & (SCE_CTRL_CIRCLE | SCE_CTRL_SELECT)) {
                 break;
             }
+            if (cursor < scroll) {
+                scroll = cursor;
+            } else if (cursor >= scroll + VISIBLE_ROWS) {
+                scroll = cursor - VISIBLE_ROWS + 1;
+            }
         }
 
-        draw_menu(cursor, lang, wide, langDirty, editingLang);
+        draw_menu(cursor, scroll, lang, langDirty, editingLang, 0);
         vglSwapBuffers(GL_FALSE);
         sceKernelPowerTick(SCE_KERNEL_POWER_TICK_DISABLE_AUTO_SUSPEND);
         sceKernelDelayThread(16000);
