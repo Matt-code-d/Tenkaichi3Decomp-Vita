@@ -3,6 +3,9 @@
  *
  * Drawn with vitaGL (same swap path that made MsgDialog visible): a dark sheet and a
  * green list over the game. psvDebugScreen is not used mid-game — it freezes the display.
+ *
+ * Layout is designed for 960x544 and scaled to the current framebuffer (fights are often
+ * 640x368), so the overlay stays on-screen in battle.
  */
 #include "vita_settings.h"
 #include "vita_eu.h"
@@ -17,24 +20,24 @@
 
 #define HOME "ux0:data/bt3"
 #define HOLD_US (1000 * 1000)
-#define MENU_W 960.0f
-#define MENU_H 544.0f
+#define DESIGN_W 960.0f
+#define DESIGN_H 544.0f
 
 enum {
     ROW_LANG = 0,
     ROW_WIDE,
     ROW_HUD,
     ROW_MENU43,
+    ROW_UNLOCK, /* early: visible without scrolling past FX toggles */
     ROW_SKIPLOGO,
     ROW_SKIPINTRO,
     ROW_OUTLINE,
     ROW_GLOW,
-    ROW_UNLOCK,
     ROW_RESUME,
     ROW_COUNT
 };
 
-#define VISIBLE_ROWS 7
+#define VISIBLE_ROWS 8
 
 extern int gVitaWide;
 extern int gVitaHudStyle;
@@ -45,6 +48,7 @@ extern int gVitaFxMask;
 extern void Vita_Log(const char *fmt, ...);
 extern void Vita_RefreshView(void);
 extern void Vita_GlSync(void);
+extern void Vita_GetScreenSize(int *w, int *h);
 extern void Port_SetAspectMilli(int milli);
 extern void vglSwapBuffers(GLboolean has_commondialog);
 
@@ -59,6 +63,8 @@ static unsigned long long sSelectDownUs;
 static int sSelectWasDown;
 static GLuint sFontTex;
 static int sFontReady;
+static float sScrW = DESIGN_W, sScrH = DESIGN_H;
+static float sSx = 1.0f, sSy = 1.0f;
 
 int Vita_SettingsOpen(void) {
     return sOpen || sPending;
@@ -190,10 +196,26 @@ static void apply_fx_bit(int bit, int enabled) {
     bt3_set_int("fxmask", gVitaFxMask);
 }
 
-/* Pixel top-left (0,0) → NDC (vitaGL fixed pipeline, same idea as the movie blit). */
+static void sync_screen(void) {
+    int w = (int)DESIGN_W, h = (int)DESIGN_H;
+
+    Vita_GetScreenSize(&w, &h);
+    if (w < 160) {
+        w = (int)DESIGN_W;
+    }
+    if (h < 120) {
+        h = (int)DESIGN_H;
+    }
+    sScrW = (float)w;
+    sScrH = (float)h;
+    sSx = sScrW / DESIGN_W;
+    sSy = sScrH / DESIGN_H;
+}
+
+/* Design pixels → NDC using the live framebuffer size. */
 static void px_to_ndc(float x, float y, float *ox, float *oy) {
-    *ox = (x / MENU_W) * 2.0f - 1.0f;
-    *oy = 1.0f - (y / MENU_H) * 2.0f;
+    *ox = (x * sSx / sScrW) * 2.0f - 1.0f;
+    *oy = 1.0f - (y * sSy / sScrH) * 2.0f;
 }
 
 static void draw_quad(float x0, float y0, float x1, float y1, float r, float g, float b, float a) {
@@ -283,6 +305,9 @@ static void row_label(int row, int lang, char *out, size_t outSz) {
     case ROW_MENU43:
         snprintf(out, outSz, "Menus in 4:3: %s", gVitaMenu43 ? "On" : "Off");
         break;
+    case ROW_UNLOCK:
+        snprintf(out, outSz, "Unlock everything...");
+        break;
     case ROW_SKIPLOGO:
         snprintf(out, outSz, "Skip logos: %s", gVitaSkipLogos ? "On" : "Off");
         break;
@@ -294,9 +319,6 @@ static void row_label(int row, int lang, char *out, size_t outSz) {
         break;
     case ROW_GLOW:
         snprintf(out, outSz, "Glow: %s", (gVitaFxMask & 2) ? "Off" : "On");
-        break;
-    case ROW_UNLOCK:
-        snprintf(out, outSz, "Unlock everything...");
         break;
     case ROW_RESUME:
         snprintf(out, outSz, "Resume game");
@@ -310,11 +332,13 @@ static void row_label(int row, int lang, char *out, size_t outSz) {
 static void draw_menu(int cursor, int scroll, int lang, int langDirty, int editingLang, int confirmUnlock) {
     int count = VitaEu_LocaleCount();
     int i;
-    float px = 140.0f, py = 40.0f, pw = 680.0f, ph = 460.0f;
+    float px = 80.0f, py = 28.0f, pw = 800.0f, ph = 488.0f;
+    float rowStep = 40.0f;
     char line[96];
 
+    sync_screen();
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    glViewport(0, 0, (GLsizei)MENU_W, (GLsizei)MENU_H);
+    glViewport(0, 0, (GLsizei)sScrW, (GLsizei)sScrH);
     glUseProgram(0);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
@@ -327,20 +351,20 @@ static void draw_menu(int cursor, int scroll, int lang, int langDirty, int editi
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
 
-    draw_quad(0, 0, MENU_W, MENU_H, 0.0f, 0.0f, 0.0f, 0.55f);
+    draw_quad(0, 0, DESIGN_W, DESIGN_H, 0.0f, 0.0f, 0.0f, 0.55f);
     draw_quad(px, py, px + pw, py + ph, 0.05f, 0.08f, 0.05f, 0.92f);
-    draw_quad(px, py, px + pw, py + 36.0f, 0.0f, 0.35f, 0.12f, 1.0f);
-    draw_text(px + 200.0f, py + 10.0f, 2.0f, 0.6f, 1.0f, 0.6f, "BT3 SETTINGS");
+    draw_quad(px, py, px + pw, py + 32.0f, 0.0f, 0.35f, 0.12f, 1.0f);
+    draw_text(px + 220.0f, py + 8.0f, 2.0f, 0.6f, 1.0f, 0.6f, "BT3 SETTINGS");
 
     if (confirmUnlock) {
-        draw_text(px + 24.0f, py + 80.0f, 2.0f, 1.0f, 0.9f, 0.4f, "Unlock everything?");
-        draw_text(px + 24.0f, py + 120.0f, 1.5f, 0.85f, 0.85f, 0.7f, "All characters, stages, items.");
-        draw_text(px + 24.0f, py + 148.0f, 1.5f, 0.85f, 0.85f, 0.7f, "Save to card afterwards.");
-        draw_text(px + 24.0f, py + 200.0f, 2.0f, cursor == 0 ? 0.5f : 0.9f, 1.0f, cursor == 0 ? 0.5f : 0.9f,
+        draw_text(px + 24.0f, py + 70.0f, 2.0f, 1.0f, 0.9f, 0.4f, "Unlock everything?");
+        draw_text(px + 24.0f, py + 110.0f, 1.5f, 0.85f, 0.85f, 0.7f, "All characters, stages, items.");
+        draw_text(px + 24.0f, py + 138.0f, 1.5f, 0.85f, 0.85f, 0.7f, "Save to card afterwards.");
+        draw_text(px + 24.0f, py + 190.0f, 2.0f, cursor == 0 ? 0.5f : 0.9f, 1.0f, cursor == 0 ? 0.5f : 0.9f,
                   cursor == 0 ? "> Yes, unlock" : "  Yes, unlock");
-        draw_text(px + 24.0f, py + 240.0f, 2.0f, cursor == 1 ? 0.5f : 0.9f, 1.0f, cursor == 1 ? 0.5f : 0.9f,
+        draw_text(px + 24.0f, py + 230.0f, 2.0f, cursor == 1 ? 0.5f : 0.9f, 1.0f, cursor == 1 ? 0.5f : 0.9f,
                   cursor == 1 ? "> Cancel" : "  Cancel");
-        draw_text(px + 24.0f, py + ph - 40.0f, 1.5f, 0.7f, 0.85f, 0.5f, "UP/DOWN  X:OK  O:back");
+        draw_text(px + 24.0f, py + ph - 36.0f, 1.5f, 0.7f, 0.85f, 0.5f, "UP/DOWN  X:OK  O:back");
         return;
     }
 
@@ -355,13 +379,13 @@ static void draw_menu(int cursor, int scroll, int lang, int langDirty, int editi
             snprintf(line, sizeof(line), "%s %s", sel ? ">" : " ", VitaEu_LocaleName(i));
             draw_text(px + 32.0f, yy, 2.0f, sel ? 0.5f : 0.85f, 1.0f, sel ? 0.5f : 0.85f, line);
         }
-        draw_text(px + 24.0f, py + ph - 40.0f, 1.5f, 0.7f, 0.85f, 0.5f, "UP/DOWN  X:save  O:back");
+        draw_text(px + 24.0f, py + ph - 36.0f, 1.5f, 0.7f, 0.85f, 0.5f, "UP/DOWN  X:save  O:back");
         return;
     }
 
     for (i = 0; i < VISIBLE_ROWS; i++) {
         int row = scroll + i;
-        float yy = py + 56.0f + (float)i * 44.0f;
+        float yy = py + 48.0f + (float)i * rowStep;
         int sel;
         char label[80];
 
@@ -371,20 +395,20 @@ static void draw_menu(int cursor, int scroll, int lang, int langDirty, int editi
         sel = (row == cursor);
         row_label(row, lang, label, sizeof(label));
         if (sel) {
-            draw_quad(px + 16.0f, yy - 6.0f, px + pw - 16.0f, yy + 30.0f, 0.0f, 0.45f, 0.15f, 1.0f);
+            draw_quad(px + 16.0f, yy - 4.0f, px + pw - 16.0f, yy + 28.0f, 0.0f, 0.45f, 0.15f, 1.0f);
         }
         snprintf(line, sizeof(line), "%s %s", sel ? ">" : " ", label);
-        draw_text(px + 32.0f, yy, 2.0f, sel ? 0.5f : 0.9f, 1.0f, sel ? 0.5f : 0.9f, line);
+        draw_text(px + 32.0f, yy, 1.75f, sel ? 0.5f : 0.9f, 1.0f, sel ? 0.5f : 0.9f, line);
     }
     if (scroll > 0) {
-        draw_text(px + pw - 60.0f, py + 48.0f, 1.5f, 0.5f, 0.8f, 0.5f, "^");
+        draw_text(px + pw - 60.0f, py + 40.0f, 1.5f, 0.5f, 0.8f, 0.5f, "^");
     }
     if (scroll + VISIBLE_ROWS < ROW_COUNT) {
-        draw_text(px + pw - 60.0f, py + ph - 70.0f, 1.5f, 0.5f, 0.8f, 0.5f, "v");
+        draw_text(px + pw - 60.0f, py + ph - 64.0f, 1.5f, 0.5f, 0.8f, 0.5f, "v");
     }
-    draw_text(px + 24.0f, py + ph - 50.0f, 1.5f, 0.7f, 0.85f, 0.5f, "UP/DOWN  L/R or X:change  O:close");
+    draw_text(px + 24.0f, py + ph - 44.0f, 1.5f, 0.7f, 0.85f, 0.5f, "UP/DOWN  L/R or X:change  O:close");
     if (langDirty) {
-        draw_text(px + 24.0f, py + ph - 28.0f, 1.5f, 1.0f, 0.85f, 0.2f, "Restart to apply language");
+        draw_text(px + 24.0f, py + ph - 24.0f, 1.5f, 1.0f, 0.85f, 0.2f, "Restart to apply language");
     }
 }
 
@@ -449,7 +473,8 @@ static void run_overlay(void) {
     sOpen = 1;
     sPending = 0;
     Vita_GlSync(); /* vitaGL must be free (not mid-frame / render-thread) */
-    Vita_Log("vita: settings menu open\n");
+    sync_screen();
+    Vita_Log("vita: settings menu open (%dx%d)\n", (int)sScrW, (int)sScrH);
     prev = buttons();
 
     for (;;) {

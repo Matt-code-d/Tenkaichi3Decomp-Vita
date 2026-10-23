@@ -98,6 +98,16 @@ void Vita_RefreshView(void) {
     apply_view_w();
     glViewport(VIEW_X, 0, VIEW_W, VIEW_H);
 }
+
+/* Current draw buffer size (960x544 in menus, 640x368 in fights when menuhi=1). */
+void Vita_GetScreenSize(int *w, int *h) {
+    if (w) {
+        *w = sScrW;
+    }
+    if (h) {
+        *h = sScrH;
+    }
+}
 #define MAX_VERTS 45000
 #define MAX_TEX 384
 #define TEX_BUCKETS 1024
