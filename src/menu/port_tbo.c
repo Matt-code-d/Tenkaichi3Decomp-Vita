@@ -359,9 +359,13 @@ s32 gPortTboSpar;       /* the battle that runs is Train While Waiting's sparrin
 static char sTbBgCode[CODE_LEN + 1];
 static f32 Tb_Beat(s32 period);
 
-static char *sTbHubName[HUB_COUNT] = {"Quick Match", "Ranked Match", "Create Room", "Join Room", "Friends", "Tournament", "Replays", "Leaderboard", "Profile"};
+/* English fallbacks; live text comes from translations/port/<menu_lang>.json (MenuTranslation_PortText). */
+static const char *sTbHubNameEn[HUB_COUNT] = {"Quick Match", "Ranked Match", "Create Room", "Join Room", "Friends", "Tournament", "Replays", "Leaderboard", "Profile"};
+static const char *sTbHubId[HUB_COUNT] = {
+    "tbo/hub/quick_match", "tbo/hub/ranked", "tbo/hub/create_room", "tbo/hub/join_room", "tbo/hub/friends",
+    "tbo/hub/tournament", "tbo/hub/replays", "tbo/hub/leaderboard", "tbo/hub/profile"};
 static const s32 sTbHubReady[HUB_COUNT] = {1, 0, 1, 1, 0, 0, 0, 0, 1};
-static char *sTbHubSay[HUB_COUNT] = {
+static const char *sTbHubSayEn[HUB_COUNT] = {
     "Fight whoever is searching right now! No time limit, and you can train while you wait.",
     "Fights that move your rank, season by season. That one is coming soon!",
     "Open a room with your own rules, then give your rival its code. No port forwarding needed!",
@@ -372,8 +376,69 @@ static char *sTbHubSay[HUB_COUNT] = {
     "The strongest in the world, among your friends, and with each fighter. Coming soon!",
     "The name your rivals see.",
 };
-static char *sTbTime[5] = {"60 SECONDS", "90 SECONDS", "180 SECONDS", "240 SECONDS", "NO LIMIT"};
+static const char *sTbHubSayId[HUB_COUNT] = {
+    "tbo/say/quick_match", "tbo/say/ranked", "tbo/say/create_room", "tbo/say/join_room", "tbo/say/friends",
+    "tbo/say/tournament", "tbo/say/replays", "tbo/say/leaderboard", "tbo/say/profile"};
+static const char *sTbTimeEn[5] = {"60 SECONDS", "90 SECONDS", "180 SECONDS", "240 SECONDS", "NO LIMIT"};
+static const char *sTbTimeId[5] = {"tbo/time/60", "tbo/time/90", "tbo/time/180", "tbo/time/240", "tbo/time/nolimit"};
 static char sTbKeys[KEY_ROWS][KEY_COLS + 1] = {"ABCDEFGHI", "JKLMNOPQR", "STUVWXYZ0", "123456789"};
+
+extern void MenuTranslation_PortTextCopy(const char *id, const char *fallback, char *out, int size);
+/*
+ * Port catalogs live in host memory; this file is game code (32-bit pointers).
+ * Never keep MenuTranslation_PortText's return — it truncates and crashes.
+ * PortTextCopy writes into a game-side scratch buffer instead.
+ */
+static const char *Tb_P(const char *id, const char *en) {
+    static char buf[8][384];
+    static int slot;
+    char *out = buf[slot++ & 7];
+
+    /* Always return the scratch buffer (never mix with a literal in a select). */
+    MenuTranslation_PortTextCopy(id, en != NULL ? en : "", out, 384);
+    return out;
+}
+static const char *Tb_HubName(s32 i) {
+    return (i >= 0 && i < HUB_COUNT) ? Tb_P(sTbHubId[i], sTbHubNameEn[i]) : "";
+}
+static const char *Tb_HubSay(s32 i) {
+    return (i >= 0 && i < HUB_COUNT) ? Tb_P(sTbHubSayId[i], sTbHubSayEn[i]) : "";
+}
+static const char *Tb_Time(s32 i) {
+    return (i >= 0 && i < 5) ? Tb_P(sTbTimeId[i], sTbTimeEn[i]) : "";
+}
+/* Mutable copy for Ps_Text/Ps_Heading (char*). */
+static char *Tb_Scratch(const char *s) {
+    static char buf[4][384];
+    static int slot;
+    char *out = buf[slot++ & 3];
+    Ps_Copy(out, s != NULL ? s : "", 384);
+    return out;
+}
+static char *Tb_S(const char *id, const char *en) {
+    return Tb_Scratch(Tb_P(id, en));
+}
+static const char *Tb_BtnLabel(const char *en) {
+    if (en == NULL) {
+        return "";
+    }
+    if (!strcmp(en, "DELETE")) {
+        return Tb_P("tbo/btn/delete", en);
+    }
+    if (!strcmp(en, "PASTE")) {
+        return Tb_P("tbo/btn/paste", en);
+    }
+    if (!strcmp(en, "JOIN")) {
+        return Tb_P("tbo/btn/join", en);
+    }
+    if (!strcmp(en, "DONE")) {
+        return Tb_P("tbo/btn/done", en);
+    }
+    if (!strcmp(en, "SPACE")) {
+        return Tb_P("tbo/btn/space", en);
+    }
+    return en;
+}
 
 /* ---------------------------------------------------------------------------------------------- small things */
 static f32 Tb_Beat(s32 period) {
@@ -448,22 +513,21 @@ static void Tb_LoadChoices(void) {
 
 static void Tb_DelayText(char *out, s32 delay) {
     if (delay < 0) {
-        sprintf(out, "AUTOMATIC");
+        Ps_Copy(out, Tb_P("tbo/val/automatic", "AUTOMATIC"), 32);
+    } else if (delay == 1) {
+        sprintf(out, Tb_P("tbo/val/n_frame", "%d FRAME"), (int)delay);
     } else {
-        sprintf(out, "%d FRAME", (int)delay);
-        if (delay != 1) {
-            Ps_Cat(out, "S", 32);
-        }
+        sprintf(out, Tb_P("tbo/val/n_frames", "%d FRAMES"), (int)delay);
     }
 }
 
 static void Tb_RollText(char *out, s32 roll) {
     if (!Port_RollCan()) {
-        sprintf(out, "NOT ON THIS PC");
+        Ps_Copy(out, Tb_P("tbo/val/not_on_pc", "NOT ON THIS PC"), 32);
     } else if (roll <= 0) {
-        sprintf(out, "OFF");
+        Ps_Copy(out, Tb_P("tbo/val/off", "OFF"), 32);
     } else {
-        sprintf(out, "UP TO %d FRAMES", (int)roll);
+        sprintf(out, Tb_P("tbo/val/up_to_frames", "UP TO %d FRAMES"), (int)roll);
     }
 }
 
@@ -476,7 +540,7 @@ static s32 Tb_Vanilla(void) {
     s32 state = Port_DataFingerprint(NULL);
 
     if (state == 0) {
-        Tb_Note("CHECKING YOUR GAME DATA AGAINST THE DISC... TRY AGAIN IN A MOMENT");
+        Tb_Note(Tb_S("tbo/note/checking", "CHECKING YOUR GAME DATA AGAINST THE DISC... TRY AGAIN IN A MOMENT"));
         return 0;
     }
     if (state == 1 && Port_DataFingerprintOriginal() == 1) {
@@ -491,7 +555,7 @@ static s32 Tb_Vanilla(void) {
 static void Tb_BlockUpdate(s32 live) {
     Pad *pad = &gPad[0];
 
-    Ps_Prompt(0, "Back");
+    Ps_Prompt(0, Tb_S("tbo/prompt/back", "Back"));
     if (live && (pad->gamePressed & (PADG_CROSS | PADG_CIRCLE | PADG_TRIANGLE))) {
         Snd_PlaySe(1, 2);
         Tb_SetMode(sTb->blockBack);
@@ -515,7 +579,7 @@ static void Tb_BeginSearch(s32 host) {
     Port_NetNameGet(); /* (the saved name is the one sent) */
     state = Port_LobbyStartCode(host, host ? "" : sTb->code);
     if (state < 0) {
-        Tb_Note("THE NETWORK COULD NOT BE OPENED ON THIS PC");
+        Tb_Note(Tb_S("tbo/note/net_fail", "THE NETWORK COULD NOT BE OPENED ON THIS PC"));
         return;
     }
     sTb->host = host;
@@ -550,9 +614,9 @@ static s32 Tb_SearchNews(void) {
         if (state == -3) {
             Tb_Note((char *)Port_LobbyError());
         } else if (state == -4) {
-            Tb_Note("THE TWO GAMES COULD NOT REACH EACH OTHER, EVEN THROUGH THE RELAY");
+            Tb_Note(Tb_S("tbo/note/relay_fail", "THE TWO GAMES COULD NOT REACH EACH OTHER, EVEN THROUGH THE RELAY"));
         } else if (state < 0) {
-            Tb_Note("THE ROOM COULD NOT BE OPENED");
+            Tb_Note(Tb_S("tbo/note/room_fail", "THE ROOM COULD NOT BE OPENED"));
         }
         Port_LobbyCancel();
         Tb_SetMode(sTb->waitBack == TB_WAIT || sTb->waitBack == TB_SPAR ? TB_HUB : sTb->waitBack);
@@ -566,10 +630,10 @@ static void Tb_WaitUpdate(s32 live) {
 
     if (!sTb->found) {
         if (sTb->host == 1 && Port_LobbyCode()[0] != 0) {
-            Ps_Prompt(0, "Copy Code");
+            Ps_Prompt(0, Tb_S("tbo/prompt/copy_code", "Copy Code"));
         }
-        Ps_Prompt(1, "Train While Waiting");
-        Ps_Prompt(4, "Cancel");
+        Ps_Prompt(1, Tb_S("tbo/page/train", "Train While Waiting"));
+        Ps_Prompt(4, Tb_S("tbo/prompt/cancel", "Cancel"));
     }
     if (Tb_SearchNews()) {
         return;
@@ -580,7 +644,7 @@ static void Tb_WaitUpdate(s32 live) {
     if ((pad->gamePressed & PADG_CROSS) && sTb->host == 1 && Port_LobbyCode()[0] != 0) { /* the code, to paste to the rival */
         PortTbo_Copy(Port_LobbyCode());
         Snd_PlaySe(1, 1);
-        Tb_Note("COPIED: PASTE THE CODE TO YOUR RIVAL");
+        Tb_Note(Tb_S("tbo/note/copied", "COPIED: PASTE THE CODE TO YOUR RIVAL"));
     } else if (pad->gamePressed & PADG_SQUARE) { /* the fighters of the sparring fight first; the search goes on */
         Snd_PlaySe(1, 1);
         sTb->spCur = 2;
@@ -616,9 +680,9 @@ static void Tb_SparUpdate(s32 live) {
     Pad *pad = &gPad[0];
     s32 *who;
 
-    Ps_Prompt(3, "Change");
-    Ps_Prompt(0, sTb->spCur == 2 ? "Start Training" : "Next");
-    Ps_Prompt(2, "Back");
+    Ps_Prompt(3, Tb_S("tbo/prompt/change", "Change"));
+    Ps_Prompt(0, sTb->spCur == 2 ? Tb_S("tbo/prompt/start_training", "Start Training") : Tb_S("tbo/prompt/next", "Next"));
+    Ps_Prompt(2, Tb_S("tbo/prompt/back", "Back"));
     if (Tb_SearchNews()) {
         return;
     }
@@ -679,7 +743,7 @@ static void Tb_QuickStart(void) {
     Port_SettingsWrite();
     state = Port_LobbyStartQuick(sTb->queue);
     if (state < 0) {
-        Tb_Note("THE NETWORK COULD NOT BE OPENED ON THIS PC");
+        Tb_Note(Tb_S("tbo/note/net_fail", "THE NETWORK COULD NOT BE OPENED ON THIS PC"));
         return;
     }
     sTb->host = 2;
@@ -692,9 +756,9 @@ static void Tb_QuickStart(void) {
 static void Tb_QuickUpdate(s32 live) {
     Pad *pad = &gPad[0];
 
-    Ps_Prompt(3, "Change");
-    Ps_Prompt(0, sTb->qkCur == 1 ? "Search" : "Next");
-    Ps_Prompt(2, "Back");
+    Ps_Prompt(3, Tb_S("tbo/prompt/change", "Change"));
+    Ps_Prompt(0, sTb->qkCur == 1 ? Tb_S("tbo/prompt/search", "Search") : Tb_S("tbo/prompt/next", "Next"));
+    Ps_Prompt(2, Tb_S("tbo/prompt/back", "Back"));
     if (sTb->frames - sTb->asked > 1800) { /* how many wait in each queue, asked again every half minute */
         sTb->asked = sTb->frames;
         Port_LobbyQueuesAsk();
@@ -725,8 +789,8 @@ static void Tb_QuickUpdate(s32 live) {
 static void Tb_HubUpdate(s32 live) {
     Pad *pad = &gPad[0];
 
-    Ps_Prompt(0, "Enter");
-    Ps_Prompt(2, "Back");
+    Ps_Prompt(0, Tb_S("tbo/prompt/enter", "Enter"));
+    Ps_Prompt(2, Tb_S("tbo/prompt/back", "Back"));
     if (!live) {
         return;
     }
@@ -759,7 +823,7 @@ static void Tb_HubUpdate(s32 live) {
             break;
         default:
             Snd_PlaySe(1, 2);
-            Tb_Note("NOT OPEN YET: IT NEEDS MORE FROM THE MATCHMAKING SERVICE THAN ROOM CODES");
+            Tb_Note(Tb_S("tbo/note/not_open", "NOT OPEN YET: IT NEEDS MORE FROM THE MATCHMAKING SERVICE THAN ROOM CODES"));
             break;
         }
     } else if (pad->gamePressed & PADG_TRIANGLE) {
@@ -774,9 +838,9 @@ static void Tb_CreateUpdate(s32 live) {
     Pad *pad = &gPad[0];
     s32 side;
 
-    Ps_Prompt(3, "Change");
-    Ps_Prompt(0, sTb->crCur == CR_OPEN ? "Open Room" : "Next");
-    Ps_Prompt(2, "Back");
+    Ps_Prompt(3, Tb_S("tbo/prompt/change", "Change"));
+    Ps_Prompt(0, sTb->crCur == CR_OPEN ? Tb_S("tbo/prompt/open_room", "Open Room") : Tb_S("tbo/prompt/next", "Next"));
+    Ps_Prompt(2, Tb_S("tbo/prompt/back", "Back"));
     if (!live) {
         return;
     }
@@ -920,7 +984,7 @@ static void Tb_Keypad(f32 x, f32 y, s32 rows, char (*keys)[KEY_COLS + 1], const 
         /* (JOIN and DONE as the others: gold is the one the cursor is on) */
         Ps_Pill(on ? TBO_KIT_SEL : TBO_KIT_BAR, x0, by, x1, by + 28.0f, 0x80);
         Ps_Align(1);
-        Ps_Text((x0 + x1) * 0.5f, Ps_TextTop(by + 14.0f, 0.6f), b[k].label, 0.6f, x1 - x0 - 12.0f, on ? 1 : 0);
+        Ps_Text((x0 + x1) * 0.5f, Ps_TextTop(by + 14.0f, 0.6f), Tb_Scratch(Tb_BtnLabel(b[k].label)), 0.6f, x1 - x0 - 12.0f, on ? 1 : 0);
         Ps_Align(0);
     }
 }
@@ -950,7 +1014,7 @@ static void Tb_JoinTry(void) {
         Tb_BeginSearch(0);
     } else {
         Snd_PlaySe(1, 2);
-        Tb_Note("A ROOM CODE HAS SIX LETTERS AND NUMBERS");
+        Tb_Note(Tb_S("tbo/note/code_len", "A ROOM CODE HAS SIX LETTERS AND NUMBERS"));
     }
 }
 
@@ -958,9 +1022,9 @@ static void Tb_JoinUpdate(s32 live) {
     Pad *pad = &gPad[0];
     s32 c;
 
-    Ps_Prompt(0, "Enter");
-    Ps_Prompt(1, "Delete");
-    Ps_Prompt(2, "Back");
+    Ps_Prompt(0, Tb_S("tbo/prompt/enter", "Enter"));
+    Ps_Prompt(1, Tb_S("tbo/btn/delete", "Delete"));
+    Ps_Prompt(2, Tb_S("tbo/prompt/back", "Back"));
     if (!live) {
         return;
     }
@@ -1010,8 +1074,8 @@ static void Tb_JoinUpdate(s32 live) {
 static void Tb_ProfileUpdate(s32 live) {
     Pad *pad = &gPad[0];
 
-    Ps_Prompt(0, "Type Name");
-    Ps_Prompt(2, "Back");
+    Ps_Prompt(0, Tb_S("tbo/name/type", "Type Name"));
+    Ps_Prompt(2, Tb_S("tbo/prompt/back", "Back"));
     if (!live) {
         return;
     }
@@ -1069,9 +1133,9 @@ static void Tb_NameUpdate(s32 live) {
     s32 c;
     s32 done = 0;
 
-    Ps_Prompt(0, "Enter");
-    Ps_Prompt(1, "Delete");
-    Ps_Prompt(2, "Cancel");
+    Ps_Prompt(0, Tb_S("tbo/prompt/enter", "Enter"));
+    Ps_Prompt(1, Tb_S("tbo/btn/delete", "Delete"));
+    Ps_Prompt(2, Tb_S("tbo/prompt/cancel", "Cancel"));
     if (!live) {
         return;
     }
@@ -1110,7 +1174,7 @@ static void Tb_NameUpdate(s32 live) {
         }
         if (sTb->typedLen > 0) {
             Port_NetNameSave(sTb->typed);
-            Tb_Note("SAVED: YOUR RIVALS WILL SEE THIS NAME");
+            Tb_Note(Tb_S("tbo/note/saved_name", "SAVED: YOUR RIVALS WILL SEE THIS NAME"));
         }
         Snd_PlaySe(1, 1);
         Tb_SetMode(TB_PROFILE);
@@ -1235,13 +1299,13 @@ static void Tb_DrawHubText(void) {
 
         /* each label's capitals in the middle of its bar (the bar under the cursor: hubY - 3 to hubY + 27) */
         if (i == sTb->hubCur) {
-            Ps_Text(36.0f + slide, Ps_TextTop(sTb->hubY + 12.0f, 0.84f), sTbHubName[i], 0.84f, 0.0f, 1);
+            Ps_Text(36.0f + slide, Ps_TextTop(sTb->hubY + 12.0f, 0.84f), Tb_Scratch(Tb_HubName(i)), 0.84f, 0.0f, 1);
         } else {
-            Ps_Text(36.0f + slide, Ps_TextTop(y + 12.0f, 0.7f), sTbHubName[i], 0.7f, 0.0f, sTbHubReady[i] ? 0 : 4);
+            Ps_Text(36.0f + slide, Ps_TextTop(y + 12.0f, 0.7f), Tb_Scratch(Tb_HubName(i)), 0.7f, 0.0f, sTbHubReady[i] ? 0 : 4);
         }
         if (!sTbHubReady[i]) {
             Ps_Align(1);
-            Ps_Text(Tb_HubRowEnd(i) - 26.0f + slide + (i == sTb->hubCur ? 18.0f : 0.0f), Ps_TextTop(Tb_HubRowY(i) + 12.0f, 0.42f), "SOON", 0.42f,
+            Ps_Text(Tb_HubRowEnd(i) - 26.0f + slide + (i == sTb->hubCur ? 18.0f : 0.0f), Ps_TextTop(Tb_HubRowY(i) + 12.0f, 0.42f), Tb_S("tbo/soon", "SOON"), 0.42f,
                     0.0f, 4);
             Ps_Align(0);
         }
@@ -1272,21 +1336,23 @@ static void Tb_DrawCreate(void) {
 
 static void Tb_DrawCreateText(void) {
     static char value[CR_COUNT][32];
-    static char *label[CR_COUNT] = {"Battle", "Time Limit", "Input Delay", "Rollback", "Open Room"};
+    static const char *labelId[CR_COUNT] = {
+        "tbo/create/battle", "tbo/create/time_limit", "tbo/create/input_delay", "tbo/create/rollback", "tbo/create/open_room"};
+    static const char *labelEn[CR_COUNT] = {"Battle", "Time Limit", "Input Delay", "Rollback", "Open Room"};
     s32 i;
 
-    sprintf(value[CR_BATTLE], sTb->battle ? "TEAMS (UP TO 5)" : "ONE ON ONE");
-    Ps_Copy(value[CR_TIME], sTbTime[sTb->time], 32);
+    Ps_Copy(value[CR_BATTLE], sTb->battle ? Tb_P("tbo/val/teams", "TEAMS (UP TO 5)") : Tb_P("tbo/val/one_on_one", "ONE ON ONE"), 32);
+    Ps_Copy(value[CR_TIME], Tb_Time(sTb->time), 32);
     Tb_DelayText(value[CR_DELAY], sTb->delay);
     Tb_RollText(value[CR_ROLL], sTb->roll);
     value[CR_OPEN][0] = 0;
     Ps_Align(1);
-    Ps_Text(157.0f, Ps_TextTop(80.0f, 0.56f), "ROOM SETTINGS", 0.56f, 0.0f, 2);
+    Ps_Text(157.0f, Ps_TextTop(80.0f, 0.56f), Tb_S("tbo/create/room_settings", "ROOM SETTINGS"), 0.56f, 0.0f, 2);
     Ps_Align(0);
     for (i = 0; i < CR_COUNT; i++) {
         f32 y = 100.0f + 34.0f * (f32)i;
 
-        Ps_Text(36.0f, Ps_TextTop(y + 13.0f, 0.66f), label[i], 0.66f, 120.0f, i == sTb->crCur ? 1 : 0);
+        Ps_Text(36.0f, Ps_TextTop(y + 13.0f, 0.66f), Tb_S(labelId[i], labelEn[i]), 0.66f, 120.0f, i == sTb->crCur ? 1 : 0);
         Ps_Align(2);
         Ps_Text(266.0f, Ps_TextTop(y + 13.0f, 0.54f), value[i], 0.54f, 130.0f, 3);
         Ps_Align(0);
@@ -1339,43 +1405,43 @@ static void Tb_DrawWaitText(void) {
     if (sTb->host == 2) {
         s32 n = Port_LobbyQueueWaiting(sTb->queue);
 
-        Ps_Text(22.0f, 94.0f, "QUICK MATCH", 0.56f, 0.0f, 0);
+        Ps_Text(22.0f, 94.0f, Tb_S("tbo/wait/quick_match", "QUICK MATCH"), 0.56f, 0.0f, 0);
         Ps_Align(1);
-        Ps_Text(95.0f, 124.0f, sTb->queue ? "TEAMS" : "ONE ON ONE", 0.86f, 156.0f, 1);
+        Ps_Text(95.0f, 124.0f, sTb->queue ? Tb_S("tbo/val/teams_short", "TEAMS") : Tb_S("tbo/val/one_on_one", "ONE ON ONE"), 0.86f, 156.0f, 1);
         Ps_Align(0);
-        Ps_Text(22.0f, 172.0f, "THE SERVICE PAIRS YOU", 0.46f, 150.0f, 0);
-        Ps_Text(22.0f, 190.0f, "WITH THE NEXT RIVAL", 0.46f, 150.0f, 0);
+        Ps_Text(22.0f, 172.0f, Tb_S("tbo/wait/pairs_1", "THE SERVICE PAIRS YOU"), 0.46f, 150.0f, 0);
+        Ps_Text(22.0f, 190.0f, Tb_S("tbo/wait/pairs_2", "WITH THE NEXT RIVAL"), 0.46f, 150.0f, 0);
         if (n > 0) {
-            sprintf(line, "%d IN THIS QUEUE", (int)n);
+            sprintf(line, Tb_P("tbo/wait/n_in_queue", "%d IN THIS QUEUE"), (int)n);
             Ps_Text(22.0f, 214.0f, line, 0.42f, 150.0f, 5);
         }
     } else if (sTb->host) {
-        Ps_Text(22.0f, 94.0f, "ROOM CODE", 0.56f, 0.0f, 0);
+        Ps_Text(22.0f, 94.0f, Tb_S("tbo/wait/room_code", "ROOM CODE"), 0.56f, 0.0f, 0);
         Ps_Align(1);
         if (code[0] != 0) {
             Ps_Text(95.0f, 120.0f, (char *)code, 1.2f, 156.0f, 0);
         } else {
-            Ps_Text(95.0f, 130.0f, "GETTING A CODE...", 0.5f, 156.0f, 0);
+            Ps_Text(95.0f, 130.0f, Tb_S("tbo/wait/getting_code", "GETTING A CODE..."), 0.5f, 156.0f, 0);
         }
         Ps_Align(0);
-        Ps_Text(22.0f, 172.0f, code[0] != 0 ? "GIVE THIS CODE TO" : "ASKING THE", 0.46f, 150.0f, 0);
-        Ps_Text(22.0f, 190.0f, code[0] != 0 ? "YOUR RIVAL" : "MATCHMAKING SERVICE", 0.46f, 150.0f, 0);
+        Ps_Text(22.0f, 172.0f, code[0] != 0 ? Tb_S("tbo/wait/give_1", "GIVE THIS CODE TO") : Tb_S("tbo/wait/ask_1", "ASKING THE"), 0.46f, 150.0f, 0);
+        Ps_Text(22.0f, 190.0f, code[0] != 0 ? Tb_S("tbo/wait/give_2", "YOUR RIVAL") : Tb_S("tbo/wait/ask_2", "MATCHMAKING SERVICE"), 0.46f, 150.0f, 0);
         if (Port_LobbyOther()) {
-            Ps_Text(22.0f, 214.0f, "ANOTHER VERSION TRIED", 0.42f, 150.0f, 3);
+            Ps_Text(22.0f, 214.0f, Tb_S("tbo/wait/other_version", "ANOTHER VERSION TRIED"), 0.42f, 150.0f, 3);
         }
     } else {
-        Ps_Text(22.0f, 94.0f, "JOINING ROOM", 0.56f, 0.0f, 0);
+        Ps_Text(22.0f, 94.0f, Tb_S("tbo/wait/joining", "JOINING ROOM"), 0.56f, 0.0f, 0);
         Ps_Align(1);
         Ps_Text(95.0f, 120.0f, sTb->code, 1.2f, 156.0f, 0);
         Ps_Align(0);
-        Ps_Text(22.0f, 172.0f, "LOOKING FOR", 0.46f, 150.0f, 0);
-        Ps_Text(22.0f, 190.0f, "THE HOST...", 0.46f, 150.0f, 0);
+        Ps_Text(22.0f, 172.0f, Tb_S("tbo/wait/look_1", "LOOKING FOR"), 0.46f, 150.0f, 0);
+        Ps_Text(22.0f, 190.0f, Tb_S("tbo/wait/look_2", "THE HOST..."), 0.46f, 150.0f, 0);
     }
     Ps_Align(1);
     if (sTb->found) {
-        Ps_Text(262.0f, 302.0f, "YOUR RIVAL IS HERE!", 0.56f, 164.0f, 5);
+        Ps_Text(262.0f, 302.0f, Tb_S("tbo/wait/rival_here", "YOUR RIVAL IS HERE!"), 0.56f, 164.0f, 5);
     } else {
-        sprintf(line, "SEARCHING...  %d:%02d", (int)(secs / 60), (int)(secs % 60));
+        sprintf(line, Tb_P("tbo/wait/searching", "SEARCHING...  %d:%02d"), (int)(secs / 60), (int)(secs % 60));
         Ps_Text(262.0f, 302.0f, line, 0.52f, 164.0f, 0);
     }
     Ps_Align(0);
@@ -1393,19 +1459,19 @@ static void Tb_DrawBlockText(void) {
     const char *m = t;
     s32 n;
 
-    Ps_Heading(80.0f, 108.0f, "Cannot Go Online", 0.9f, 250.0f, 0x80);
-    Ps_Msg(80.0f, 146.0f, "Online matches are only between", 1.0f, 0x80);
-    Ps_Msg(80.0f, 166.0f, "two unmodded games.", 1.0f, 0x80);
+    Ps_Heading(80.0f, 108.0f, Tb_S("tbo/block/title", "Cannot Go Online"), 0.9f, 250.0f, 0x80);
+    Ps_Msg(80.0f, 146.0f, Tb_S("tbo/block/line1", "Online matches are only between"), 1.0f, 0x80);
+    Ps_Msg(80.0f, 166.0f, Tb_S("tbo/block/line2", "two unmodded games."), 1.0f, 0x80);
     while (*m != 0 && strncmp(m, "modified:", 9) != 0) {
         m++;
     }
     if (*m != 0) { /* which parts differ, as the data check says it */
-        Ps_Copy(parts, "Changed: ", 96);
+        Ps_Copy(parts, Tb_P("tbo/block/changed", "Changed: "), 96);
         Ps_Cat(parts, m + 10, 9 + 81);
     } else if (Port_DataFingerprint(NULL) == 1) {
-        sprintf(parts, "Your game data is not the disc's.");
+        Ps_Copy(parts, Tb_P("tbo/block/not_disc", "Your game data is not the disc's."), 96);
     } else {
-        sprintf(parts, "Your game data could not be checked.");
+        Ps_Copy(parts, Tb_P("tbo/block/unchecked", "Your game data could not be checked."), 96);
     }
     for (n = 0; parts[n] != 0; n++) {
         if (parts[n] == ',') {
@@ -1413,10 +1479,10 @@ static void Tb_DrawBlockText(void) {
         }
     }
     Ps_Msg(80.0f, 196.0f, parts, 1.0f, 0x80);
-    Ps_Msg(80.0f, 226.0f, "Take out what you added in gamedata/mods.", 1.0f, 0x80);
-    Ps_Msg(80.0f, 246.0f, "(Fighter mods switch off by themselves online.)", 1.0f, 0x70);
+    Ps_Msg(80.0f, 226.0f, Tb_S("tbo/block/remove_mods", "Take out what you added in gamedata/mods."), 1.0f, 0x80);
+    Ps_Msg(80.0f, 246.0f, Tb_S("tbo/block/fighter_note", "(Fighter mods switch off by themselves online.)"), 1.0f, 0x70);
     Ps_Align(1);
-    Ps_Text(256.0f, 285.0f, "BACK", 0.56f, 0.0f, 1);
+    Ps_Text(256.0f, 285.0f, Tb_S("tbo/btn/back", "BACK"), 0.56f, 0.0f, 1);
     Ps_Align(0);
 }
 
@@ -1425,7 +1491,7 @@ static void Tb_DrawName(void) {
     static char line[40];
 
     Ps_Panel(TBO_KIT_WINDOW, 64.0f, 62.0f, 448.0f, 340.0f, 0x80);
-    Ps_Text(84.0f, 70.0f, "TYPE YOUR NAME", 0.6f, 0.0f, 2);
+    Ps_Text(84.0f, 70.0f, Tb_S("tbo/name/type", "TYPE YOUR NAME"), 0.6f, 0.0f, 2);
     Ps_Pill(TBO_KIT_BAR, 84.0f, 94.0f, 428.0f, 124.0f, 0x80);
     Ps_Copy(line, sTb->typed, 40);
     Ps_Cat(line, (sTb->frames / 16) & 1 ? "_" : " ", 40);
@@ -1443,19 +1509,23 @@ static void Tb_DrawSparText(void) {
     static char line[64];
     s32 secs = (sTb->frames - sTb->waitFrom) / 60;
 
-    Ps_Text(26.0f, 76.0f, "SPARRING AT THE TOURNAMENT", 0.6f, 270.0f, 2);
-    Ps_Text(36.0f, 115.0f, "You", 0.66f, 70.0f, sTb->spCur == 0 ? 1 : 0);
-    Ps_Text(36.0f, 149.0f, "Partner", 0.66f, 80.0f, sTb->spCur == 1 ? 1 : 0);
-    Ps_Text(36.0f, 183.0f, "Start Training", 0.66f, 200.0f, sTb->spCur == 2 ? 1 : 0);
+    Ps_Text(26.0f, 76.0f, Tb_S("tbo/spar/title", "SPARRING AT THE TOURNAMENT"), 0.6f, 270.0f, 2);
+    Ps_Text(36.0f, 115.0f, Tb_S("tbo/spar/you", "You"), 0.66f, 70.0f, sTb->spCur == 0 ? 1 : 0);
+    Ps_Text(36.0f, 149.0f, Tb_S("tbo/spar/partner", "Partner"), 0.66f, 80.0f, sTb->spCur == 1 ? 1 : 0);
+    Ps_Text(36.0f, 183.0f, Tb_S("tbo/spar/start", "Start Training"), 0.66f, 200.0f, sTb->spCur == 2 ? 1 : 0);
     Ps_Align(2);
     Ps_Text(266.0f, 117.0f, Tb_Fighter(sTb->spMe), 0.54f, 170.0f, 3);
     Ps_Text(266.0f, 151.0f, Tb_Fighter(sTb->spFoe), 0.54f, 170.0f, 3);
     Ps_Align(0);
-    Ps_Text(28.0f, 240.0f, sTb->host == 2 ? "QUICK MATCH SEARCH" : sTb->host ? "YOUR ROOM IS OPEN" : "JOINING A ROOM", 0.5f, 260.0f, 2);
-    sprintf(line, "SEARCHING  %d:%02d", (int)(secs / 60), (int)(secs % 60));
+    Ps_Text(28.0f, 240.0f,
+            sTb->host == 2 ? Tb_S("tbo/spar/quick_search", "QUICK MATCH SEARCH")
+                           : sTb->host ? Tb_S("tbo/spar/room_open", "YOUR ROOM IS OPEN")
+                                       : Tb_S("tbo/spar/joining", "JOINING A ROOM"),
+            0.5f, 260.0f, 2);
+    sprintf(line, Tb_P("tbo/spar/searching", "SEARCHING  %d:%02d"), (int)(secs / 60), (int)(secs % 60));
     Ps_Text(28.0f, 264.0f, line, 0.52f, 260.0f, 5);
-    Ps_Text(28.0f, 292.0f, "THE MATCH STARTS THE MOMENT", 0.42f, 260.0f, 0);
-    Ps_Text(28.0f, 308.0f, "YOUR RIVAL ARRIVES", 0.42f, 260.0f, 0);
+    Ps_Text(28.0f, 292.0f, Tb_S("tbo/spar/starts_1", "THE MATCH STARTS THE MOMENT"), 0.42f, 260.0f, 0);
+    Ps_Text(28.0f, 308.0f, Tb_S("tbo/spar/starts_2", "YOUR RIVAL ARRIVES"), 0.42f, 260.0f, 0);
 }
 
 static void Tb_DrawQuick(void) {
@@ -1468,27 +1538,28 @@ static void Tb_DrawQuickText(void) {
     static char line[64];
     s32 q;
 
-    Ps_Text(26.0f, 76.0f, "PICK YOUR BATTLE", 0.62f, 0.0f, 2);
-    Ps_Text(36.0f, 115.0f, "Battle", 0.66f, 110.0f, sTb->qkCur == 0 ? 1 : 0);
+    Ps_Text(26.0f, 76.0f, Tb_S("tbo/quick/pick", "PICK YOUR BATTLE"), 0.62f, 0.0f, 2);
+    Ps_Text(36.0f, 115.0f, Tb_S("tbo/quick/battle", "Battle"), 0.66f, 110.0f, sTb->qkCur == 0 ? 1 : 0);
     Ps_Align(2);
-    Ps_Text(266.0f, 117.0f, sTb->queue ? "TEAMS (UP TO 5)" : "ONE ON ONE", 0.54f, 140.0f, 3);
+    Ps_Text(266.0f, 117.0f, sTb->queue ? Tb_S("tbo/val/teams", "TEAMS (UP TO 5)") : Tb_S("tbo/val/one_on_one", "ONE ON ONE"), 0.54f, 140.0f, 3);
     Ps_Align(0);
-    Ps_Text(36.0f, 149.0f, "Search", 0.66f, 110.0f, sTb->qkCur == 1 ? 1 : 0);
-    Ps_Text(28.0f, 206.0f, "WAITING RIGHT NOW", 0.52f, 0.0f, 2);
+    Ps_Text(36.0f, 149.0f, Tb_S("tbo/quick/search", "Search"), 0.66f, 110.0f, sTb->qkCur == 1 ? 1 : 0);
+    Ps_Text(28.0f, 206.0f, Tb_S("tbo/quick/waiting_now", "WAITING RIGHT NOW"), 0.52f, 0.0f, 2);
     for (q = 0; q < 2; q++) {
         s32 n = Port_LobbyQueueWaiting(q);
 
-        Ps_Text(36.0f, 234.0f + 26.0f * (f32)q, q ? "Teams" : "One on One", 0.56f, 120.0f, q == sTb->queue ? 1 : 0);
+        Ps_Text(36.0f, 234.0f + 26.0f * (f32)q, q ? Tb_S("tbo/quick/teams", "Teams") : Tb_S("tbo/quick/one_on_one", "One on One"), 0.56f, 120.0f,
+                q == sTb->queue ? 1 : 0);
         if (n < 0) {
             sprintf(line, "...");
         } else {
-            sprintf(line, "%d WAITING", (int)n);
+            sprintf(line, Tb_P("tbo/quick/n_waiting", "%d WAITING"), (int)n);
         }
         Ps_Align(2);
         Ps_Text(286.0f, 236.0f + 26.0f * (f32)q, line, 0.5f, 120.0f, n > 0 ? 5 : 3);
         Ps_Align(0);
     }
-    sprintf(line, "NO TIME LIMIT - %d%% SPEED", (int)Port_NetSpeedStandard());
+    sprintf(line, Tb_P("tbo/quick/no_time_limit", "NO TIME LIMIT - %d%% SPEED"), (int)Port_NetSpeedStandard());
     Ps_Text(28.0f, 296.0f, line, 0.46f, 260.0f, 3);
 }
 
@@ -1499,15 +1570,14 @@ static void Tb_DrawProfile(void) {
 
 static void Tb_DrawProfileText(void) {
     static char value[PR_COUNT][32];
-    static char *label[PR_COUNT] = {"Name"};
     s32 i;
 
     Ps_Copy(value[PR_NAME], Port_NetNameGet(), 32);
-    Ps_Text(26.0f, 76.0f, "PLAYER CARD", 0.62f, 0.0f, 2);
+    Ps_Text(26.0f, 76.0f, Tb_S("tbo/profile/card", "PLAYER CARD"), 0.62f, 0.0f, 2);
     for (i = 0; i < PR_COUNT; i++) {
         f32 y = 110.0f + 34.0f * (f32)i;
 
-        Ps_Text(36.0f, Ps_TextTop(y + 13.0f, 0.66f), label[i], 0.66f, 110.0f, i == sTb->prCur ? 1 : 0);
+        Ps_Text(36.0f, Ps_TextTop(y + 13.0f, 0.66f), Tb_S("tbo/profile/name", "Name"), 0.66f, 110.0f, i == sTb->prCur ? 1 : 0);
         Ps_Align(2);
         Ps_Text(266.0f, Ps_TextTop(y + 13.0f, 0.54f), value[i], 0.54f, 140.0f, 3);
         Ps_Align(0);
@@ -1518,32 +1588,53 @@ static void Tb_DrawProfileText(void) {
 static char *Tb_Help(void) {
     switch (sTb->mode) {
     case TB_HUB:
-        return sTbHubSay[sTb->hubCur];
+        return Tb_Scratch(Tb_HubSay(sTb->hubCur));
     case TB_CREATE:
-        return sTb->crCur == CR_DELAY ? "How late your moves come out. Automatic measures the line when the match starts."
-               : sTb->crCur == CR_ROLL ? "Your moves come out at once and the game corrects itself. More frames cope with a slower line."
-               : "Set the rules of your tournament! Then your rival joins with the room code.";
+        return sTb->crCur == CR_DELAY
+                   ? Tb_S("tbo/help/create_delay", "How late your moves come out. Automatic measures the line when the match starts.")
+               : sTb->crCur == CR_ROLL
+                   ? Tb_S("tbo/help/create_roll",
+                          "Your moves come out at once and the game corrects itself. More frames cope with a slower line.")
+                   : Tb_S("tbo/help/create", "Set the rules of your tournament! Then your rival joins with the room code.");
     case TB_JOIN:
-        return "Enter your rival's room code, or Paste the one they sent you! Then Join.";
+        return Tb_S("tbo/help/join", "Enter your rival's room code, or Paste the one they sent you! Then Join.");
     case TB_WAIT:
-        return sTb->found ? "Here we go! The match is starting!" : "Looking for a worthy challenger... Warm up in Training meanwhile!";
+        return sTb->found ? Tb_S("tbo/help/wait_found", "Here we go! The match is starting!")
+                          : Tb_S("tbo/help/wait", "Looking for a worthy challenger... Warm up in Training meanwhile!");
     case TB_BLOCK:
-        return "Sorry! Online fights have to be fair, so only the game straight off the disc can play.";
+        return Tb_S("tbo/help/block", "Sorry! Online fights have to be fair, so only the game straight off the disc can play.");
     case TB_SPAR:
-        return "Warm up at the tournament while we search! Pick yourself and a sparring partner.";
+        return Tb_S("tbo/help/spar", "Warm up at the tournament while we search! Pick yourself and a sparring partner.");
     case TB_QUICK:
-        return "Pick a battle and we'll find you a rival! No time limit, and the game runs a little faster.";
+        return Tb_S("tbo/help/quick", "Pick a battle and we'll find you a rival! No time limit, and the game runs a little faster.");
     case TB_NAME:
-        return "Pick your letters, then Done! Square deletes, Start finishes.";
+        return Tb_S("tbo/help/name", "Pick your letters, then Done! Square deletes, Start finishes.");
     case TB_PROFILE:
-        return "Show everyone who you are! This is the name your rivals see.";
+        return Tb_S("tbo/help/profile", "Show everyone who you are! This is the name your rivals see.");
     }
-    return "";
+    return Tb_Scratch("");
 }
 
 /* Each page's title (by TB_ mode), as its heading shows it and the screen reader says it. */
-static char *sTbTitle[9] = {"Tenkaichi Budokai Online", "Create Room", "Join Room", "Searching", "Profile", "Profile", "Quick Match",
-                            "Train While Waiting", "Tenkaichi Budokai Online"};
+static const char *Tb_Title(s32 mode) {
+    switch (mode) {
+    case 1:
+        return Tb_P("tbo/hub/create_room", "Create Room");
+    case 2:
+        return Tb_P("tbo/hub/join_room", "Join Room");
+    case 3:
+        return Tb_P("tbo/page/searching", "Searching");
+    case 4:
+    case 5:
+        return Tb_P("tbo/hub/profile", "Profile");
+    case 6:
+        return Tb_P("tbo/hub/quick_match", "Quick Match");
+    case 7:
+        return Tb_P("tbo/page/train", "Train While Waiting");
+    default:
+        return Tb_P("tbo/title", "Tenkaichi Budokai Online");
+    }
+}
 
 /* ---- the screen reader (port/src/gs/a11y.c; silent unless the player has it on). The game's own screens are read
    from their state by port/src/a11y_game.c; these pages say what they show themselves: the page's title as it opens,
@@ -1601,20 +1692,22 @@ static void Tb_Speak(void) {
     now[0] = 0;
     switch (sTb->mode) {
     case TB_HUB:
-        Ps_Copy(focus, sTbHubName[sTb->hubCur], 160);
+        Ps_Copy(focus, Tb_HubName(sTb->hubCur), 160);
         if (!sTbHubReady[sTb->hubCur]) {
             Ps_Cat(focus, ", soon", 160);
         }
         break;
     case TB_CREATE: {
-        static char *label[CR_COUNT] = {"Battle", "Time Limit", "Input Delay", "Rollback", "Open Room"};
+        static const char *labelId[CR_COUNT] = {
+            "tbo/create/battle", "tbo/create/time_limit", "tbo/create/input_delay", "tbo/create/rollback", "tbo/create/open_room"};
+        static const char *labelEn[CR_COUNT] = {"Battle", "Time Limit", "Input Delay", "Rollback", "Open Room"};
 
-        Ps_Copy(focus, label[sTb->crCur], 160);
+        Ps_Copy(focus, Tb_P(labelId[sTb->crCur], labelEn[sTb->crCur]), 160);
         part[0] = 0;
         if (sTb->crCur == CR_BATTLE) {
-            Ps_Copy(part, sTb->battle ? "Teams, up to 5" : "One on one", 64);
+            Ps_Copy(part, sTb->battle ? Tb_P("tbo/quick/teams", "Teams") : Tb_P("tbo/quick/one_on_one", "One on one"), 64);
         } else if (sTb->crCur == CR_TIME) {
-            Ps_Copy(part, sTbTime[sTb->time], 64);
+            Ps_Copy(part, Tb_Time(sTb->time), 64);
         } else if (sTb->crCur == CR_DELAY) {
             Tb_DelayText(part, sTb->delay);
         } else if (sTb->crCur == CR_ROLL) {
@@ -1683,7 +1776,7 @@ static void Tb_Speak(void) {
         static char line[224];
 
         mode = sTb->mode;
-        Ps_Copy(line, sTbTitle[mode], 224);
+        Ps_Copy(line, Tb_Title(mode), 224);
         Ps_Cat(line, ". ", 224);
         Ps_Cat(line, focus, 224);
         PortA11y_Say(line, TB_SAY_INTERRUPT);
@@ -1836,10 +1929,8 @@ static void Tb_Draw(void) {
 }
 
 static void Tb_DrawText(void) {
-    char **title = sTbTitle;
-
     /* its capitals centred on the crest beside it (y 32); up to the player card */
-    Ps_Heading(Tb_TitleLeft() + 44.0f, Ps_TextTop(32.0f, 1.3f), title[sTb->mode], 1.3f, 248.0f, 0x80);
+    Ps_Heading(Tb_TitleLeft() + 44.0f, Ps_TextTop(32.0f, 1.3f), Tb_Scratch(Tb_Title(sTb->mode)), 1.3f, 248.0f, 0x80);
     Tb_PageIn(1);
     switch (sTb->mode) {
     case TB_HUB:
@@ -2047,16 +2138,16 @@ void PortTbo_SparSign(void) {
     secs = (sTbBgFrames + sTbSignFrames) / 60;
     Ps_PageSet();
     Ps_Panel(TBO_KIT_DIALOG, 128.0f, 66.0f, 384.0f, 124.0f, 0x70); /* (as much room under the lines as over them) */
-    sprintf(line, "Searching for a rival...  %d:%02d", (int)(secs / 60), (int)(secs % 60));
+    sprintf(line, Tb_P("tbo/spar_sign/searching", "Searching for a rival...  %d:%02d"), (int)(secs / 60), (int)(secs % 60));
     Ps_Msg(146.0f, 72.0f, line, 1.0f, 0x80);
     if (sTbBgKind == 2) {
-        Ps_Copy(line, "Quick Match: ", 64);
-        Ps_Cat(line, sTbBgQueue ? "Teams" : "One on One", 64);
+        Ps_Copy(line, Tb_P("tbo/spar_sign/quick", "Quick Match: "), 64);
+        Ps_Cat(line, sTbBgQueue ? Tb_P("tbo/quick/teams", "Teams") : Tb_P("tbo/quick/one_on_one", "One on One"), 64);
     } else if (sTbBgKind == 1) {
-        Ps_Copy(line, "Your room: ", 64);
+        Ps_Copy(line, Tb_P("tbo/spar_sign/room", "Your room: "), 64);
         Ps_Cat(line, Port_LobbyCode(), 64);
     } else {
-        Ps_Copy(line, "Joining room ", 64);
+        Ps_Copy(line, Tb_P("tbo/spar_sign/joining", "Joining room "), 64);
         Ps_Cat(line, sTbBgCode, 64);
     }
     Ps_Msg(146.0f, 93.0f, line, 1.0f, 0x80);

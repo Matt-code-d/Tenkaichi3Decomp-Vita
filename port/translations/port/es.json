@@ -1,0 +1,531 @@
+{
+  "schema_version": 1,
+  "labels_version": 3,
+  "translation_version": 1,
+  "labels_count": 130,
+  "locale": "es",
+  "name": "Espanol",
+  "order": 2,
+  "labels": {
+    "quit/confirm": {
+      "original": "Close the game?\nUnsaved progress will be lost.",
+      "text": "Cerrar el juego?\nSe perdera el progreso sin guardar."
+    },
+    "net/connecting": {
+      "original": "Connecting to your rival...",
+      "text": "Conectando con tu rival..."
+    },
+    "net/rival_here": {
+      "original": "Your rival \"{name}\" is here! The match begins.",
+      "text": "Tu rival \"{name}\" esta aqui! Empieza el combate."
+    },
+    "tbo/title": {
+      "original": "Tenkaichi Budokai Online",
+      "text": "Tenkaichi Budokai Online"
+    },
+    "tbo/hub/quick_match": {
+      "original": "Quick Match",
+      "text": "Partida rapida"
+    },
+    "tbo/hub/ranked": {
+      "original": "Ranked Match",
+      "text": "Partida clasificatoria"
+    },
+    "tbo/hub/create_room": {
+      "original": "Create Room",
+      "text": "Crear sala"
+    },
+    "tbo/hub/join_room": {
+      "original": "Join Room",
+      "text": "Unirse a sala"
+    },
+    "tbo/hub/friends": {
+      "original": "Friends",
+      "text": "Amigos"
+    },
+    "tbo/hub/tournament": {
+      "original": "Tournament",
+      "text": "Torneo"
+    },
+    "tbo/hub/replays": {
+      "original": "Replays",
+      "text": "Repeticiones"
+    },
+    "tbo/hub/leaderboard": {
+      "original": "Leaderboard",
+      "text": "Clasificacion"
+    },
+    "tbo/hub/profile": {
+      "original": "Profile",
+      "text": "Perfil"
+    },
+    "tbo/page/searching": {
+      "original": "Searching",
+      "text": "Buscando"
+    },
+    "tbo/page/train": {
+      "original": "Train While Waiting",
+      "text": "Entrena mientras esperas"
+    },
+    "tbo/say/quick_match": {
+      "original": "Fight whoever is searching right now! No time limit, and you can train while you wait.",
+      "text": "Lucha contra quien busque ahora! Sin limite de tiempo, y puedes entrenar mientras esperas."
+    },
+    "tbo/say/ranked": {
+      "original": "Fights that move your rank, season by season. That one is coming soon!",
+      "text": "Combates que mueven tu rango, temporada a temporada. Proximamente!"
+    },
+    "tbo/say/create_room": {
+      "original": "Open a room with your own rules, then give your rival its code. No port forwarding needed!",
+      "text": "Abre una sala con tus reglas y dale el codigo a tu rival. Sin abrir puertos!"
+    },
+    "tbo/say/join_room": {
+      "original": "Got a room code from your rival? Type it in and jump right into their room!",
+      "text": "Tienes un codigo de sala? Escribelo y entra en su sala!"
+    },
+    "tbo/say/friends": {
+      "original": "Your rivals, who is online, and invites. That one is coming soon!",
+      "text": "Tus rivales, quien esta online e invitaciones. Proximamente!"
+    },
+    "tbo/say/tournament": {
+      "original": "The Tenkaichi Budokai itself: brackets of 4 to 16 players. That one is coming soon!",
+      "text": "El Tenkaichi Budokai: cuadros de 4 a 16 jugadores. Proximamente!"
+    },
+    "tbo/say/replays": {
+      "original": "Your last matches, saved to watch again. That one is coming soon!",
+      "text": "Tus ultimos combates, guardados para verlos otra vez. Proximamente!"
+    },
+    "tbo/say/leaderboard": {
+      "original": "The strongest in the world, among your friends, and with each fighter. Coming soon!",
+      "text": "Los mas fuertes del mundo, entre amigos y por luchador. Proximamente!"
+    },
+    "tbo/say/profile": {
+      "original": "The name your rivals see.",
+      "text": "El nombre que ven tus rivales."
+    },
+    "tbo/time/60": {
+      "original": "60 SECONDS",
+      "text": "60 SEGUNDOS"
+    },
+    "tbo/time/90": {
+      "original": "90 SECONDS",
+      "text": "90 SEGUNDOS"
+    },
+    "tbo/time/180": {
+      "original": "180 SECONDS",
+      "text": "180 SEGUNDOS"
+    },
+    "tbo/time/240": {
+      "original": "240 SECONDS",
+      "text": "240 SEGUNDOS"
+    },
+    "tbo/time/nolimit": {
+      "original": "NO LIMIT",
+      "text": "SIN LIMITE"
+    },
+    "tbo/notice/rival_here": {
+      "original": "Tenkaichi Budokai Online: your opponent is here! The match begins.",
+      "text": "Tenkaichi Budokai Online: tu rival esta aqui! Empieza el combate."
+    },
+    "tbo/notice/room_closed": {
+      "original": "Tenkaichi Budokai Online: the room was closed.",
+      "text": "Tenkaichi Budokai Online: la sala se cerro."
+    },
+    "tbo/soon": {
+      "original": "SOON",
+      "text": "PRONTO"
+    },
+    "tbo/btn/delete": {
+      "original": "DELETE",
+      "text": "BORRAR"
+    },
+    "tbo/btn/paste": {
+      "original": "PASTE",
+      "text": "PEGAR"
+    },
+    "tbo/btn/join": {
+      "original": "JOIN",
+      "text": "UNIRSE"
+    },
+    "tbo/btn/done": {
+      "original": "DONE",
+      "text": "LISTO"
+    },
+    "tbo/btn/space": {
+      "original": "SPACE",
+      "text": "ESPACIO"
+    },
+    "tbo/btn/back": {
+      "original": "BACK",
+      "text": "ATRAS"
+    },
+    "tbo/prompt/change": {
+      "original": "Change",
+      "text": "Cambiar"
+    },
+    "tbo/prompt/next": {
+      "original": "Next",
+      "text": "Siguiente"
+    },
+    "tbo/prompt/back": {
+      "original": "Back",
+      "text": "Atras"
+    },
+    "tbo/prompt/enter": {
+      "original": "Enter",
+      "text": "Entrar"
+    },
+    "tbo/prompt/copy_code": {
+      "original": "Copy Code",
+      "text": "Copiar codigo"
+    },
+    "tbo/prompt/cancel": {
+      "original": "Cancel",
+      "text": "Cancelar"
+    },
+    "tbo/prompt/open_room": {
+      "original": "Open Room",
+      "text": "Abrir sala"
+    },
+    "tbo/prompt/start_training": {
+      "original": "Start Training",
+      "text": "Empezar entrenamiento"
+    },
+    "tbo/prompt/search": {
+      "original": "Search",
+      "text": "Buscar"
+    },
+    "tbo/create/room_settings": {
+      "original": "ROOM SETTINGS",
+      "text": "AJUSTES DE SALA"
+    },
+    "tbo/create/battle": {
+      "original": "Battle",
+      "text": "Combate"
+    },
+    "tbo/create/time_limit": {
+      "original": "Time Limit",
+      "text": "Limite de tiempo"
+    },
+    "tbo/create/input_delay": {
+      "original": "Input Delay",
+      "text": "Retraso de entrada"
+    },
+    "tbo/create/rollback": {
+      "original": "Rollback",
+      "text": "Rollback"
+    },
+    "tbo/create/open_room": {
+      "original": "Open Room",
+      "text": "Abrir sala"
+    },
+    "tbo/val/one_on_one": {
+      "original": "ONE ON ONE",
+      "text": "UNO CONTRA UNO"
+    },
+    "tbo/val/teams": {
+      "original": "TEAMS (UP TO 5)",
+      "text": "EQUIPOS (HASTA 5)"
+    },
+    "tbo/val/teams_short": {
+      "original": "TEAMS",
+      "text": "EQUIPOS"
+    },
+    "tbo/val/automatic": {
+      "original": "AUTOMATIC",
+      "text": "AUTOMATICO"
+    },
+    "tbo/val/n_frame": {
+      "original": "%d FRAME",
+      "text": "%d FRAME"
+    },
+    "tbo/val/n_frames": {
+      "original": "%d FRAMES",
+      "text": "%d FRAMES"
+    },
+    "tbo/val/not_on_pc": {
+      "original": "NOT ON THIS PC",
+      "text": "NO EN ESTE PC"
+    },
+    "tbo/val/off": {
+      "original": "OFF",
+      "text": "OFF"
+    },
+    "tbo/val/up_to_frames": {
+      "original": "UP TO %d FRAMES",
+      "text": "HASTA %d FRAMES"
+    },
+    "tbo/help/create": {
+      "original": "Set the rules of your tournament! Then your rival joins with the room code.",
+      "text": "Define las reglas de tu torneo! Luego tu rival entra con el codigo."
+    },
+    "tbo/help/create_delay": {
+      "original": "How late your moves come out. Automatic measures the line when the match starts.",
+      "text": "Cuanto tardan tus movimientos. Automatico mide la linea al empezar."
+    },
+    "tbo/help/create_roll": {
+      "original": "Your moves come out at once and the game corrects itself. More frames cope with a slower line.",
+      "text": "Tus movimientos salen al instante y el juego se corrige. Mas frames aguantan una linea lenta."
+    },
+    "tbo/help/join": {
+      "original": "Enter your rival's room code, or Paste the one they sent you! Then Join.",
+      "text": "Introduce el codigo de tu rival, o Pega el que te envio! Luego Unirse."
+    },
+    "tbo/help/wait": {
+      "original": "Looking for a worthy challenger... Warm up in Training meanwhile!",
+      "text": "Buscando un rival digno... Calienta en Entrenamiento mientras tanto!"
+    },
+    "tbo/help/wait_found": {
+      "original": "Here we go! The match is starting!",
+      "text": "Alli vamos! El combate empieza!"
+    },
+    "tbo/help/block": {
+      "original": "Sorry! Online fights have to be fair, so only the game straight off the disc can play.",
+      "text": "Lo siento! Los combates online deben ser justos: solo el juego del disco puede jugar."
+    },
+    "tbo/help/spar": {
+      "original": "Warm up at the tournament while we search! Pick yourself and a sparring partner.",
+      "text": "Calienta en el torneo mientras buscamos! Elige tu personaje y un sparring."
+    },
+    "tbo/help/quick": {
+      "original": "Pick a battle and we'll find you a rival! No time limit, and the game runs a little faster.",
+      "text": "Elige un combate y te encontramos un rival! Sin limite de tiempo, y el juego va un poco mas rapido."
+    },
+    "tbo/help/name": {
+      "original": "Pick your letters, then Done! Square deletes, Start finishes.",
+      "text": "Elige las letras, luego Listo! Cuadrado borra, Start termina."
+    },
+    "tbo/help/profile": {
+      "original": "Show everyone who you are! This is the name your rivals see.",
+      "text": "Muestra a todos quien eres! Este es el nombre que ven tus rivales."
+    },
+    "tbo/wait/quick_match": {
+      "original": "QUICK MATCH",
+      "text": "PARTIDA RAPIDA"
+    },
+    "tbo/wait/pairs_1": {
+      "original": "THE SERVICE PAIRS YOU",
+      "text": "EL SERVICIO TE EMPAREJA"
+    },
+    "tbo/wait/pairs_2": {
+      "original": "WITH THE NEXT RIVAL",
+      "text": "CON EL PROXIMO RIVAL"
+    },
+    "tbo/wait/n_in_queue": {
+      "original": "%d IN THIS QUEUE",
+      "text": "%d EN ESTA COLA"
+    },
+    "tbo/wait/room_code": {
+      "original": "ROOM CODE",
+      "text": "CODIGO DE SALA"
+    },
+    "tbo/wait/getting_code": {
+      "original": "GETTING A CODE...",
+      "text": "OBTENIENDO CODIGO..."
+    },
+    "tbo/wait/give_1": {
+      "original": "GIVE THIS CODE TO",
+      "text": "DALE ESTE CODIGO"
+    },
+    "tbo/wait/give_2": {
+      "original": "YOUR RIVAL",
+      "text": "A TU RIVAL"
+    },
+    "tbo/wait/ask_1": {
+      "original": "ASKING THE",
+      "text": "PREGUNTANDO AL"
+    },
+    "tbo/wait/ask_2": {
+      "original": "MATCHMAKING SERVICE",
+      "text": "SERVICIO DE MATCHMAKING"
+    },
+    "tbo/wait/other_version": {
+      "original": "ANOTHER VERSION TRIED",
+      "text": "OTRA VERSION LO INTENTO"
+    },
+    "tbo/wait/joining": {
+      "original": "JOINING ROOM",
+      "text": "UNIENDOSE A SALA"
+    },
+    "tbo/wait/look_1": {
+      "original": "LOOKING FOR",
+      "text": "BUSCANDO"
+    },
+    "tbo/wait/look_2": {
+      "original": "THE HOST...",
+      "text": "EL ANFITRION..."
+    },
+    "tbo/wait/rival_here": {
+      "original": "YOUR RIVAL IS HERE!",
+      "text": "TU RIVAL ESTA AQUI!"
+    },
+    "tbo/wait/searching": {
+      "original": "SEARCHING...  %d:%02d",
+      "text": "BUSCANDO...  %d:%02d"
+    },
+    "tbo/name/type": {
+      "original": "TYPE YOUR NAME",
+      "text": "ESCRIBE TU NOMBRE"
+    },
+    "tbo/spar/title": {
+      "original": "SPARRING AT THE TOURNAMENT",
+      "text": "ENTRENAMIENTO EN EL TORNEO"
+    },
+    "tbo/spar/you": {
+      "original": "You",
+      "text": "Tu"
+    },
+    "tbo/spar/partner": {
+      "original": "Partner",
+      "text": "Companero"
+    },
+    "tbo/spar/start": {
+      "original": "Start Training",
+      "text": "Empezar entrenamiento"
+    },
+    "tbo/spar/quick_search": {
+      "original": "QUICK MATCH SEARCH",
+      "text": "BUSQUEDA PARTIDA RAPIDA"
+    },
+    "tbo/spar/room_open": {
+      "original": "YOUR ROOM IS OPEN",
+      "text": "TU SALA ESTA ABIERTA"
+    },
+    "tbo/spar/joining": {
+      "original": "JOINING A ROOM",
+      "text": "UNIENDOSE A UNA SALA"
+    },
+    "tbo/spar/searching": {
+      "original": "SEARCHING  %d:%02d",
+      "text": "BUSCANDO  %d:%02d"
+    },
+    "tbo/spar/starts_1": {
+      "original": "THE MATCH STARTS THE MOMENT",
+      "text": "EL COMBATE EMPIEZA EN CUANTO"
+    },
+    "tbo/spar/starts_2": {
+      "original": "YOUR RIVAL ARRIVES",
+      "text": "LLEGA TU RIVAL"
+    },
+    "tbo/quick/pick": {
+      "original": "PICK YOUR BATTLE",
+      "text": "ELIGE TU COMBATE"
+    },
+    "tbo/quick/battle": {
+      "original": "Battle",
+      "text": "Combate"
+    },
+    "tbo/quick/search": {
+      "original": "Search",
+      "text": "Buscar"
+    },
+    "tbo/quick/waiting_now": {
+      "original": "WAITING RIGHT NOW",
+      "text": "ESPERANDO AHORA"
+    },
+    "tbo/quick/teams": {
+      "original": "Teams",
+      "text": "Equipos"
+    },
+    "tbo/quick/one_on_one": {
+      "original": "One on One",
+      "text": "Uno contra uno"
+    },
+    "tbo/quick/n_waiting": {
+      "original": "%d WAITING",
+      "text": "%d ESPERANDO"
+    },
+    "tbo/quick/no_time_limit": {
+      "original": "NO TIME LIMIT - %d%% SPEED",
+      "text": "SIN LIMITE - VELOCIDAD %d%%"
+    },
+    "tbo/profile/card": {
+      "original": "PLAYER CARD",
+      "text": "FICHA DE JUGADOR"
+    },
+    "tbo/profile/name": {
+      "original": "Name",
+      "text": "Nombre"
+    },
+    "tbo/block/title": {
+      "original": "Cannot Go Online",
+      "text": "No puedes ir online"
+    },
+    "tbo/block/line1": {
+      "original": "Online matches are only between",
+      "text": "Los combates online solo son entre"
+    },
+    "tbo/block/line2": {
+      "original": "two unmodded games.",
+      "text": "dos juegos sin mods."
+    },
+    "tbo/block/changed": {
+      "original": "Changed: ",
+      "text": "Cambiado: "
+    },
+    "tbo/block/not_disc": {
+      "original": "Your game data is not the disc's.",
+      "text": "Tus datos no son los del disco."
+    },
+    "tbo/block/unchecked": {
+      "original": "Your game data could not be checked.",
+      "text": "No se pudieron comprobar tus datos."
+    },
+    "tbo/block/remove_mods": {
+      "original": "Take out what you added in gamedata/mods.",
+      "text": "Quita lo que anadiste en gamedata/mods."
+    },
+    "tbo/block/fighter_note": {
+      "original": "(Fighter mods switch off by themselves online.)",
+      "text": "(Las mods de luchadores se desactivan solas online.)"
+    },
+    "tbo/note/checking": {
+      "original": "CHECKING YOUR GAME DATA AGAINST THE DISC... TRY AGAIN IN A MOMENT",
+      "text": "COMPROBANDO DATOS DEL DISCO... PRUEBA EN UN MOMENTO"
+    },
+    "tbo/note/net_fail": {
+      "original": "THE NETWORK COULD NOT BE OPENED ON THIS PC",
+      "text": "NO SE PUDO ABRIR LA RED EN ESTE PC"
+    },
+    "tbo/note/relay_fail": {
+      "original": "THE TWO GAMES COULD NOT REACH EACH OTHER, EVEN THROUGH THE RELAY",
+      "text": "LOS DOS JUEGOS NO SE ALCANZARON, NI CON EL RELAY"
+    },
+    "tbo/note/room_fail": {
+      "original": "THE ROOM COULD NOT BE OPENED",
+      "text": "NO SE PUDO ABRIR LA SALA"
+    },
+    "tbo/note/copied": {
+      "original": "COPIED: PASTE THE CODE TO YOUR RIVAL",
+      "text": "COPIADO: PEGA EL CODIGO A TU RIVAL"
+    },
+    "tbo/note/not_open": {
+      "original": "NOT OPEN YET: IT NEEDS MORE FROM THE MATCHMAKING SERVICE THAN ROOM CODES",
+      "text": "AUN NO ABIERTO: HACE FALTA MAS DEL MATCHMAKING QUE SOLO CODIGOS"
+    },
+    "tbo/note/code_len": {
+      "original": "A ROOM CODE HAS SIX LETTERS AND NUMBERS",
+      "text": "UN CODIGO DE SALA TIENE SEIS LETRAS Y NUMEROS"
+    },
+    "tbo/note/saved_name": {
+      "original": "SAVED: YOUR RIVALS WILL SEE THIS NAME",
+      "text": "GUARDADO: TUS RIVALES VERAN ESTE NOMBRE"
+    },
+    "tbo/spar_sign/searching": {
+      "original": "Searching for a rival...  %d:%02d",
+      "text": "Buscando rival...  %d:%02d"
+    },
+    "tbo/spar_sign/quick": {
+      "original": "Quick Match: ",
+      "text": "Partida rapida: "
+    },
+    "tbo/spar_sign/room": {
+      "original": "Your room: ",
+      "text": "Tu sala: "
+    },
+    "tbo/spar_sign/joining": {
+      "original": "Joining room ",
+      "text": "Entrando en sala "
+    }
+  }
+}

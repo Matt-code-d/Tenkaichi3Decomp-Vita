@@ -2295,10 +2295,18 @@ static void lobby_background(void) {
     now = Port_LobbyPoll();
     if (now == 2) {
         sLobbyBg = 0;
-        Port_UiNotice("Tenkaichi Budokai Online: your opponent is here! The match begins.");
+        {
+            const char *line = MenuTranslation_PortText("tbo/notice/rival_here");
+            Port_UiNotice(line != NULL ? line : "Tenkaichi Budokai Online: your opponent is here! The match begins.");
+        }
         Port_LobbyLaunch();
     } else if (now <= 0) {
         sLobbyBg = 0;
-        Port_UiNotice(now == -3 ? Port_LobbyError() : "Tenkaichi Budokai Online: the room was closed.");
+        if (now == -3) {
+            Port_UiNotice(Port_LobbyError());
+        } else {
+            const char *line = MenuTranslation_PortText("tbo/notice/room_closed");
+            Port_UiNotice(line != NULL ? line : "Tenkaichi Budokai Online: the room was closed.");
+        }
     }
 }
