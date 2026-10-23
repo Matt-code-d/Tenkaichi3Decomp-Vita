@@ -94,7 +94,7 @@ Copy `gamedata/pzs3eu1` to `ux0:data/bt3/pzs3eu1` on the memory card. If `ZS3EUO
 `ux0:data/bt3/disc/DATA/` next to the USA opening files.
 
 The first start that finds `pzs3eu1` shows a language list. Change the language later by **holding SELECT
-for about a second** (Adrenaline-style pause menu: language and widescreen), or with a line such as `lang=it`
+for about a second** (dark Adrenaline-style overlay: language and widescreen), or with a line such as `lang=it`
 (or `es`, `de`, `fr`, `en`) in `ux0:data/bt3/bt3.txt`, or delete `ux0:data/bt3/lang.txt` so the list appears
 again. After changing language, restart so menus, story text and battle subtitles reload.
 

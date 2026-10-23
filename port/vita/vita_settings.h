@@ -1,4 +1,4 @@
-/* In-game settings (hold SELECT ~1s): Adrenaline-style pause menu for language and widescreen. */
+/* In-game settings (hold SELECT ~1s): Adrenaline-style GL pause menu (language / widescreen). */
 #ifndef VITA_SETTINGS_H
 #define VITA_SETTINGS_H
 
