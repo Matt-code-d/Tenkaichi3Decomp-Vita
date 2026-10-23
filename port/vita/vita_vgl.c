@@ -2370,6 +2370,13 @@ static void rt_sync(void) {
     }
     __sync_synchronize();
 }
+
+/* SELECT overlay and similar paths: wait for the render thread, then use the display buffer. */
+void Vita_GlSync(void) {
+    rt_sync();
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
 static void rt_put_draw(const FlushIn *in) {
     uint32_t nv = in->kind == 0 ? (uint32_t)in->vertCount * (uint32_t)sizeof(V) : 0;
     uint32_t ni = in->kind != 1 && in->idx != NULL ? (uint32_t)in->idxCount * 2u : 0;
@@ -6361,6 +6368,10 @@ void GsGpu_FrameEnd(void) {
             sLogFrames--;
         }
         frame_begin();
+    }
+    { /* SELECT overlay after the frame (and rt_sync above): never from Port_PadRead mid-draw. */
+        extern void Vita_SettingsPresent(void);
+        Vita_SettingsPresent();
     }
     t114_list_end(!gVitaGsSkip);
 }

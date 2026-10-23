@@ -44,6 +44,7 @@ extern int gVitaSkipIntro;
 extern int gVitaFxMask;
 extern void Vita_Log(const char *fmt, ...);
 extern void Vita_RefreshView(void);
+extern void Vita_GlSync(void);
 extern void Port_SetAspectMilli(int milli);
 extern void vglSwapBuffers(GLboolean has_commondialog);
 
@@ -53,13 +54,14 @@ extern SaveData *gSaveData;
 extern void Save_UnlockAll(SaveData *opt);
 
 static int sOpen;
+static int sPending; /* hold reached: open at next FrameEnd, not mid-pad-read */
 static unsigned long long sSelectDownUs;
 static int sSelectWasDown;
 static GLuint sFontTex;
 static int sFontReady;
 
 int Vita_SettingsOpen(void) {
-    return sOpen;
+    return sOpen || sPending;
 }
 
 /* ---- tiny 8x8 ASCII font (32..127), 1 bpp packed rows ---- */
@@ -311,11 +313,15 @@ static void draw_menu(int cursor, int scroll, int lang, int langDirty, int editi
     float px = 140.0f, py = 40.0f, pw = 680.0f, ph = 460.0f;
     char line[96];
 
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glViewport(0, 0, (GLsizei)MENU_W, (GLsizei)MENU_H);
     glUseProgram(0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
     glDisable(GL_DEPTH_TEST);
     glDisable(GL_STENCIL_TEST);
     glDisable(GL_CULL_FACE);
+    glDisable(GL_SCISSOR_TEST);
     glDisable(GL_ALPHA_TEST);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -441,6 +447,8 @@ static void run_overlay(void) {
     }
 
     sOpen = 1;
+    sPending = 0;
+    Vita_GlSync(); /* vitaGL must be free (not mid-frame / render-thread) */
     Vita_Log("vita: settings menu open\n");
     prev = buttons();
 
@@ -533,6 +541,7 @@ static void run_overlay(void) {
     }
 
     sOpen = 0;
+    Vita_RefreshView(); /* restore fight/menu viewport after full-screen overlay */
     Vita_Log("vita: settings menu close\n");
 }
 
@@ -541,7 +550,7 @@ void Vita_SettingsPoll(void) {
     unsigned long long now;
     int selectAlone;
 
-    if (sOpen) {
+    if (sOpen || sPending) {
         return;
     }
     memset(&pad, 0, sizeof(pad));
@@ -554,14 +563,21 @@ void Vita_SettingsPoll(void) {
             sSelectDownUs = now;
             sSelectWasDown = 1;
         } else if (now - sSelectDownUs >= HOLD_US) {
-            /* Open as soon as the hold reaches 1s (do not wait for release).
-             * SELECT is already down, so it will not count as a fresh press to close. */
+            /* Arm only: Present() runs the overlay after the frame swap (safe for menus). */
             sSelectWasDown = 0;
             sSelectDownUs = 0;
-            run_overlay();
+            sPending = 1;
+            Vita_Log("vita: settings menu pending\n");
         }
     } else {
         sSelectWasDown = 0;
         sSelectDownUs = 0;
     }
+}
+
+void Vita_SettingsPresent(void) {
+    if (!sPending || sOpen) {
+        return;
+    }
+    run_overlay();
 }
